@@ -12,7 +12,6 @@ const BASE_CHART_THEME = {
     color: "#9ca3af"
   },
   margin: { t: 25, r: 25, b: 45, l: 65 },
-  uirevision: "fixed",
   hovermode: "x unified",
   hoverlabel: {
     bgcolor: "#1a202c",
@@ -25,14 +24,16 @@ const BASE_CHART_THEME = {
     linecolor: "#202634",
     tickfont: { size: 10, color: "#64748b" },
     showgrid: true,
-    zeroline: false
+    zeroline: false,
+    autorange: true
   },
   yaxis: {
     gridcolor: "#1c2230",
     linecolor: "#202634",
     tickfont: { size: 10, color: "#64748b" },
     showgrid: true,
-    zeroline: false
+    zeroline: false,
+    autorange: true
   }
 };
 
@@ -92,11 +93,18 @@ function renderClosePricesChart(containerId, times, hlClose, mt5Close, hlLabel, 
     hoverinfo: "y+name"
   };
 
+  const chartRev = (times && times.length > 0) ? `${times[0]}_${times[times.length - 1]}` : "empty";
   const layout = {
     ...BASE_CHART_THEME,
+    uirevision: chartRev,
+    xaxis: {
+      ...BASE_CHART_THEME.xaxis,
+      autorange: true
+    },
     yaxis: {
       ...BASE_CHART_THEME.yaxis,
-      title: { text: "Close price", font: { size: 10, color: "#64748b" } }
+      title: { text: "Close price", font: { size: 10, color: "#64748b" } },
+      autorange: true
     },
     legend: {
       orientation: "h",
@@ -180,11 +188,18 @@ function renderSpreadChart(containerId, times, spread, stats) {
     });
   }
 
+  const chartRev = (times && times.length > 0) ? `${times[0]}_${times[times.length - 1]}` : "empty";
   const layout = {
     ...BASE_CHART_THEME,
+    uirevision: chartRev,
+    xaxis: {
+      ...BASE_CHART_THEME.xaxis,
+      autorange: true
+    },
     yaxis: {
       ...BASE_CHART_THEME.yaxis,
-      title: { text: "Spread (price units)", font: { size: 10, color: "#64748b" } }
+      title: { text: "Spread (price units)", font: { size: 10, color: "#64748b" } },
+      autorange: true
     },
     shapes: shapes,
     legend: {
@@ -214,11 +229,18 @@ function renderOracleBasisChart(containerId, times, oracleBasis) {
     hoverinfo: "y+name"
   };
 
+  const chartRev = (times && times.length > 0) ? `${times[0]}_${times[times.length - 1]}` : "empty";
   const layout = {
     ...BASE_CHART_THEME,
+    uirevision: chartRev,
+    xaxis: {
+      ...BASE_CHART_THEME.xaxis,
+      autorange: true
+    },
     yaxis: {
       ...BASE_CHART_THEME.yaxis,
-      title: { text: "Oracle basis (price units)", font: { size: 10, color: "#64748b" } }
+      title: { text: "Oracle basis (price units)", font: { size: 10, color: "#64748b" } },
+      autorange: true
     },
     legend: {
       orientation: "h",
@@ -252,11 +274,18 @@ function renderEquityCurveChart(containerId, equityPoints) {
     hoverinfo: "y+name"
   };
 
+  const chartRev = (times && times.length > 0) ? `${times[0]}_${times[times.length - 1]}` : "empty";
   const layout = {
     ...BASE_CHART_THEME,
+    uirevision: chartRev,
+    xaxis: {
+      ...BASE_CHART_THEME.xaxis,
+      autorange: true
+    },
     yaxis: {
       ...BASE_CHART_THEME.yaxis,
-      title: { text: "Net PnL", font: { size: 10, color: "#64748b" } }
+      title: { text: "Net PnL", font: { size: 10, color: "#64748b" } },
+      autorange: true
     },
     legend: {
       orientation: "h",
@@ -388,11 +417,18 @@ function renderSpreadWithTradesChart(containerId, times, spread, levels, trades)
     }
   }
 
+  const chartRev = (times && times.length > 0) ? `${times[0]}_${times[times.length - 1]}` : "empty";
   const layout = {
     ...BASE_CHART_THEME,
+    uirevision: chartRev,
+    xaxis: {
+      ...BASE_CHART_THEME.xaxis,
+      autorange: true
+    },
     yaxis: {
       ...BASE_CHART_THEME.yaxis,
-      title: { text: "Spread (price units)", font: { size: 10, color: "#64748b" } }
+      title: { text: "Spread (price units)", font: { size: 10, color: "#64748b" } },
+      autorange: true
     },
     legend: {
       orientation: "h",
@@ -405,3 +441,30 @@ function renderSpreadWithTradesChart(containerId, times, spread, levels, trades)
 
   Plotly.react(containerId, traces, layout, PLOTLY_FAST_CONFIG);
 }
+
+/**
+ * Resizes all mounted Plotly chart instances smoothly on window or tab change
+ */
+function resizeAllCharts() {
+  const chartIds = [
+    "chart-close-prices",
+    "chart-spread",
+    "chart-oracle-basis",
+    "chart-equity-curve",
+    "chart-spread-trades"
+  ];
+  chartIds.forEach(id => {
+    const el = document.getElementById(id);
+    if (el && el.data && typeof Plotly !== "undefined") {
+      try {
+        Plotly.Plots.resize(el);
+      } catch (e) {
+        // Ignored if element is not in DOM
+      }
+    }
+  });
+}
+
+window.addEventListener("resize", () => {
+  resizeAllCharts();
+});

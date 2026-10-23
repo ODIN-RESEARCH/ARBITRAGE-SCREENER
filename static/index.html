@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ArbitrageLab — Arbitrage Screener</title>
+  <title>ODIN RESEARCH — Arbitrage Screener</title>
   <link rel="icon" type="image/png" href="img/odin_logo.png">
-  <link rel="stylesheet" href="css/style.css?v=6">
+  <link rel="stylesheet" href="css/style.css?v=12">
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 </head>
 <body>
@@ -16,7 +16,7 @@
         <div class="brand-icon">
           <img src="img/odin_logo.png" alt="Odin Crest Emblem">
         </div>
-        <div class="brand-title">ArbitrageLab</div>
+        <div class="brand-title">ODIN SCREENER</div>
       </div>
 
       <nav class="sidebar-nav">
@@ -35,6 +35,15 @@
           </svg>
           Pair Analysis
         </div>
+        <div class="nav-item" id="nav-connections" onclick="openVenueModal()">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+            <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+            <line x1="6" y1="6" x2="6.01" y2="6"></line>
+            <line x1="6" y1="18" x2="6.01" y2="18"></line>
+          </svg>
+          Feeds & Accounts
+        </div>
       </nav>
 
       <div class="sidebar-footer">
@@ -52,14 +61,24 @@
       <section id="view-screener" class="view-section active">
         <div class="page-header-row">
           <h1 class="page-title">Arbitrage Screener</h1>
-          <button class="btn-refresh" onclick="fetchScreenerData()">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M23 4v6h-6"></path>
-              <path d="M1 20v-6h6"></path>
-              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-            </svg>
-            Refresh
-          </button>
+          <div class="header-right-actions">
+            <div class="funding-mode-toggle" id="screener-mode-toggle">
+              <button class="mode-toggle-btn active" id="btn-mode-exchange" onclick="setFundingDisplayMode('exchange')">Exchange Funding</button>
+              <button class="mode-toggle-btn" id="btn-mode-net" onclick="setFundingDisplayMode('net')">Net Carry (MT5 Swaps)</button>
+            </div>
+            <div id="connection-badge" class="connection-pill" onclick="openVenueModal()" title="Click to view broker & feed details">
+              <span class="status-dot connected" id="conn-pill-dot"></span>
+              <span id="conn-pill-text">Checking feeds...</span>
+            </div>
+            <button class="btn-refresh" onclick="fetchScreenerData(false, true)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M23 4v6h-6"></path>
+                <path d="M1 20v-6h6"></path>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+              </svg>
+              Refresh
+            </button>
+          </div>
         </div>
         
         <p class="page-description">
@@ -88,8 +107,8 @@
                 <th onclick="sortTable('current_spread')">⇅ Current Spread</th>
                 <th onclick="sortTable('current_spread_pct')">⇅ Current Spread (%)</th>
                 <th onclick="sortTable('oracle_spread')">⇅ Oracle Spread</th>
-                <th onclick="sortTable('ann_funding_long')">⇅ Ann. Funding (Long / Short)</th>
-                <th onclick="sortTable('funding_arbitrage')">⇅ Funding Arbitrage</th>
+                <th onclick="sortTable('ann_funding_long')" id="th-ann-funding">⇅ Ann. Funding (Long / Short)</th>
+                <th onclick="sortTable('funding_arbitrage')" id="th-funding-arb">⇅ Funding Arbitrage</th>
                 <th onclick="sortTable('volume_24h_usd')">⇅ 24h Volume</th>
                 <th onclick="sortTable('open_interest_usd')">⇅ Open Interest</th>
                 <th style="text-align: right;">⇅ Details</th>
@@ -183,7 +202,7 @@
                 <span style="font-size: 10px; color: var(--text-muted);">▼</span>
               </div>
               <div class="searchable-dropdown-menu" id="pair-dropdown-menu">
-                <input type="text" class="dropdown-search-input" id="pair-search-input" placeholder="Search..." oninput="filterPairDropdown(this.value)">
+                <input type="text" class="dropdown-search-input" id="pair-search-input" placeholder="Search..." oninput="filterPairDropdown(this.value)" onkeydown="handleDropdownKey(event)">
                 <div id="pair-options-container">
                   <!-- Populated dynamically -->
                 </div>
@@ -193,7 +212,7 @@
 
           <div class="control-group">
             <label class="control-label">Timeframe</label>
-            <select class="control-select" id="timeframe-select">
+            <select class="control-select" id="timeframe-select" onchange="loadSelectedPair()">
               <option value="1m" selected>1 minute</option>
               <option value="5m">5 minutes</option>
               <option value="15m">15 minutes</option>
@@ -205,7 +224,7 @@
 
           <div class="control-group">
             <label class="control-label">Lookback</label>
-            <select class="control-select" id="lookback-select">
+            <select class="control-select" id="lookback-select" onchange="loadSelectedPair()">
               <option value="24">1 day</option>
               <option value="48" selected>2 working days</option>
               <option value="72">3 days</option>
@@ -216,7 +235,7 @@
             </select>
           </div>
 
-          <button class="btn-reload" id="btn-reload-pair" onclick="loadSelectedPair()">
+          <button class="btn-reload" id="btn-reload-pair" onclick="loadSelectedPair(true)">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <path d="M23 4v6h-6"></path>
               <path d="M1 20v-6h6"></path>
@@ -224,6 +243,11 @@
             </svg>
             Reload
           </button>
+
+          <div class="funding-mode-toggle" id="pair-mode-toggle" style="margin-left: auto;">
+            <button class="mode-toggle-btn active" id="pair-btn-mode-exchange" onclick="setFundingDisplayMode('exchange')">Exchange Funding</button>
+            <button class="mode-toggle-btn" id="pair-btn-mode-net" onclick="setFundingDisplayMode('net')">Net Carry (MT5 Swaps)</button>
+          </div>
         </div>
 
         <!-- Empty State Placeholders (shown when no pair is loaded, Image 2) -->
@@ -253,12 +277,13 @@
               <div class="kpi-value" id="kpi-oracle-spread">--</div>
             </div>
             <div class="kpi-item">
-              <div class="kpi-title">Ann. Funding (Long / Short)</div>
+              <div class="kpi-title" id="kpi-title-funding-ls">Ann. Funding (Long / Short)</div>
               <div class="kpi-value" id="kpi-funding-ls">--</div>
             </div>
             <div class="kpi-item">
-              <div class="kpi-title">Funding Arbitrage</div>
+              <div class="kpi-title" id="kpi-title-funding-arb">Funding Arbitrage</div>
               <div class="kpi-value" id="kpi-funding-arb">--</div>
+              <div class="kpi-sub" id="kpi-funding-sub" style="display: none;"></div>
             </div>
             <div class="kpi-item">
               <div class="kpi-title">24h Volume</div>
@@ -343,19 +368,19 @@
               <div class="cost-estimator-grid">
                 <div class="control-group">
                   <label class="control-label">HL fee %</label>
-                  <input type="number" step="0.001" class="control-input" id="cost-hl-fee" value="0.010" style="width: 85px;">
+                  <input type="number" step="0.001" class="control-input" id="cost-hl-fee" value="0.010" style="width: 85px;" onkeydown="if(event.key==='Enter') applyCostEstimation()">
                 </div>
                 <div class="control-group">
                   <label class="control-label">MT5 avg spread</label>
-                  <input type="number" step="0.01" class="control-input" id="cost-mt5-spread" value="4" style="width: 95px;">
+                  <input type="number" step="0.01" class="control-input" id="cost-mt5-spread" value="4" style="width: 95px;" onkeydown="if(event.key==='Enter') applyCostEstimation()">
                 </div>
                 <div class="control-group">
                   <label class="control-label">MT5 fee $</label>
-                  <input type="number" step="0.01" class="control-input" id="cost-mt5-fee" value="0.00" style="width: 75px;">
+                  <input type="number" step="0.01" class="control-input" id="cost-mt5-fee" value="0.00" style="width: 75px;" onkeydown="if(event.key==='Enter') applyCostEstimation()">
                 </div>
                 <div class="control-group">
                   <label class="control-label">Reference price</label>
-                  <input type="number" step="0.1" class="control-input" id="cost-ref-price" value="48207" style="width: 105px;">
+                  <input type="number" step="0.1" class="control-input" id="cost-ref-price" value="48207" style="width: 105px;" onkeydown="if(event.key==='Enter') applyCostEstimation()">
                 </div>
                 <button class="btn-apply-cost" onclick="applyCostEstimation()">
                   Apply to Cost / side
@@ -370,23 +395,23 @@
             <div class="strategy-inputs-row">
               <div class="control-group">
                 <label class="control-label">Buy Entry</label>
-                <input type="number" step="0.01" class="control-input" id="bt-buy-entry" placeholder="0" style="width: 85px;">
+                <input type="number" step="any" class="control-input" id="bt-buy-entry" placeholder="0" style="width: 85px;" onkeydown="if(event.key==='Enter') runBacktest()">
               </div>
               <div class="control-group">
                 <label class="control-label">Buy Exit</label>
-                <input type="number" step="0.01" class="control-input" id="bt-buy-exit" placeholder="20" style="width: 85px;">
+                <input type="number" step="any" class="control-input" id="bt-buy-exit" placeholder="20" style="width: 85px;" onkeydown="if(event.key==='Enter') runBacktest()">
               </div>
               <div class="control-group">
                 <label class="control-label">Sell Entry</label>
-                <input type="number" step="0.01" class="control-input" id="bt-sell-entry" placeholder="50" style="width: 85px;">
+                <input type="number" step="any" class="control-input" id="bt-sell-entry" placeholder="50" style="width: 85px;" onkeydown="if(event.key==='Enter') runBacktest()">
               </div>
               <div class="control-group">
                 <label class="control-label">Sell Exit</label>
-                <input type="number" step="0.01" class="control-input" id="bt-sell-exit" placeholder="30" style="width: 85px;">
+                <input type="number" step="any" class="control-input" id="bt-sell-exit" placeholder="30" style="width: 85px;" onkeydown="if(event.key==='Enter') runBacktest()">
               </div>
               <div class="control-group">
                 <label class="control-label">Cost / side</label>
-                <input type="number" step="0.001" class="control-input" id="bt-cost-side" placeholder="e.g. 0.05" style="width: 95px;">
+                <input type="number" step="any" class="control-input" id="bt-cost-side" placeholder="e.g. 0.05" style="width: 95px;" onkeydown="if(event.key==='Enter') runBacktest()">
               </div>
               <button class="btn-run-backtest" onclick="runBacktest()">
                 ▶ Run Backtest
@@ -479,7 +504,116 @@
     </main>
   </div>
 
-  <script src="js/charts.js?v=5"></script>
-  <script src="js/app.js?v=5"></script>
+  <!-- Floating Toast Notification Stack (Popups) -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <!-- Smart Floating Financial Cell Detail Popover (Popup) -->
+  <div id="cell-detail-popover" class="cell-detail-popover" style="display: none;"></div>
+
+  <!-- Venue Connections & Client Setup Modal -->
+  <div id="venue-modal" class="modal-backdrop" onclick="if(event.target === this) closeVenueModal()">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <img src="img/odin_logo.png" style="width:24px; height:24px; object-fit:contain;" alt="Odin">
+          <h2 style="font-size:16px; font-weight:600; margin:0; color:#ffffff;">Venue Connections & Client Setup</h2>
+        </div>
+        <button class="modal-close-btn" onclick="closeVenueModal()">&times;</button>
+      </div>
+      <div class="modal-body" id="venue-modal-content">
+        <!-- Rendered dynamically -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Interactive Trade Details Popup Modal -->
+  <div id="trade-modal-backdrop" class="modal-backdrop" onclick="closeTradeModal(event)">
+    <div class="modal-dialog" onclick="event.stopPropagation()" style="max-width: 560px;">
+      <div class="modal-header">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <div class="modal-title" id="modal-trade-title" style="font-size:15px; font-weight:600; color:#ffffff;">Trade Execution Details</div>
+          <span class="modal-side-tag tag-long" id="modal-side-tag">LONG</span>
+          <span class="modal-status-tag" id="modal-status-tag">CLOSED</span>
+        </div>
+        <button class="modal-close-btn" onclick="closeTradeModal()">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Visual PnL Meter Banner -->
+        <div class="modal-pnl-banner">
+          <div class="modal-pnl-left">
+            <div class="modal-pnl-sub">NET REALIZED PNL</div>
+            <div class="modal-pnl-main pos" id="modal-net-pnl">+0.0000</div>
+          </div>
+          <div class="modal-pnl-breakdown">
+            <div class="modal-pnl-chip">
+              <span class="chip-label">Gross Spread:</span>
+              <span class="chip-val pos" id="modal-gross-pnl">+0.0000</span>
+            </div>
+            <div class="modal-pnl-chip">
+              <span class="chip-label">Commission Friction:</span>
+              <span class="chip-val neg" id="modal-friction-cost">-0.0000</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Trade Metric Grid -->
+        <div class="modal-grid" style="grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 14px;">
+          <div class="modal-grid-item">
+            <span class="mgi-label">Entry Time (UTC)</span>
+            <span class="mgi-val num-cell" id="modal-entry-time">--</span>
+          </div>
+          <div class="modal-grid-item">
+            <span class="mgi-label">Exit Time (UTC)</span>
+            <span class="mgi-val num-cell" id="modal-exit-time">--</span>
+          </div>
+          <div class="modal-grid-item">
+            <span class="mgi-label">Entry Spread Price</span>
+            <span class="mgi-val num-cell" id="modal-entry-px">--</span>
+          </div>
+          <div class="modal-grid-item">
+            <span class="mgi-label">Exit Spread Price</span>
+            <span class="mgi-val num-cell" id="modal-exit-px">--</span>
+          </div>
+          <div class="modal-grid-item">
+            <span class="mgi-label">Holding Duration</span>
+            <span class="mgi-val" id="modal-duration">--</span>
+          </div>
+          <div class="modal-grid-item">
+            <span class="mgi-label">Strategy Trigger</span>
+            <span class="mgi-val" id="modal-level-info">Mean-Reversion Threshold</span>
+          </div>
+        </div>
+
+        <!-- Spread Execution Pathway Graphic -->
+        <div class="modal-pathway-box" style="margin-top: 14px;">
+          <div class="mpath-title">Spread Execution Pathway</div>
+          <div class="mpath-flow">
+            <div class="mpath-node">
+              <div class="mpath-sub">ENTRY SPREAD</div>
+              <div class="mpath-val" id="modal-path-entry">--</div>
+            </div>
+            <div class="mpath-arrow">➔</div>
+            <div class="mpath-node">
+              <div class="mpath-sub">EXIT / REVERSION</div>
+              <div class="mpath-val" id="modal-path-exit">--</div>
+            </div>
+            <div class="mpath-delta-box" style="margin-left:auto;">
+              <div class="mpath-sub">SPREAD DELTA</div>
+              <div class="mpath-val pos" id="modal-path-delta">--</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer" style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid #1c2436; padding-top:12px; margin-top:14px;">
+        <span style="font-size:11px; color:var(--text-muted);">Click any row in the trade audit log to inspect execution</span>
+        <button class="btn-refresh" onclick="closeTradeModal()" style="padding: 4px 14px;">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/charts.js?v=11"></script>
+  <script src="js/app.js?v=11"></script>
 </body>
 </html>

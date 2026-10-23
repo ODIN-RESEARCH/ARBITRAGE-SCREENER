@@ -27,17 +27,21 @@ class DataSynchronizer:
         if df_hl.empty or df_mt5.empty:
             return pd.DataFrame()
 
-        # Ensure datetime index with UTC tz
+        # Ensure datetime index with UTC tz and matching nanosecond resolution
         if df_hl.index.tz is None:
             df_hl.index = df_hl.index.tz_localize("UTC")
         if df_mt5.index.tz is None:
             df_mt5.index = df_mt5.index.tz_localize("UTC")
 
-        # Floor to minute for clean alignment
+        # Standardize index to datetime64[ns, UTC] with explicit name 'time'
         df_hl_res = df_hl[["close"]].rename(columns={"close": "hl_close"})
         df_mt5_res = df_mt5[["close"]].rename(columns={"close": "mt5_close"})
+        df_hl_res.index = df_hl_res.index.astype("datetime64[ns, UTC]")
+        df_mt5_res.index = df_mt5_res.index.astype("datetime64[ns, UTC]")
+        df_hl_res.index.name = "time"
+        df_mt5_res.index.name = "time"
 
-        # Merge on exact timestamp
+        # Try exact timestamp merge first (for intraday 1m, 5m, 15m, 1h bars)
         merged = pd.merge(
             df_hl_res,
             df_mt5_res,
@@ -45,6 +49,17 @@ class DataSynchronizer:
             right_index=True,
             how="inner"
         ).dropna()
+
+        # If exact merge has no matches (e.g. daily 1d bars where MT5 closes at broker 21:00 UTC vs HL 00:00 UTC),
+        # perform an asof nearest-match within 24 hours
+        if merged.empty and not df_hl_res.empty and not df_mt5_res.empty:
+            merged = pd.merge_asof(
+                df_hl_res.sort_index().reset_index(),
+                df_mt5_res.sort_index().reset_index(),
+                on="time",
+                direction="nearest",
+                tolerance=pd.Timedelta(hours=24)
+            ).dropna().set_index("time")
 
         if merged.empty:
             return pd.DataFrame()
@@ -63,7 +78,7 @@ class DataSynchronizer:
         - u +/- 1s, u +/- 2s
         - Min, Max, Median
         """
-        if spread_series.empty:
+        if spread_series is None or spread_series.empty:
             return {
                 "count": 0,
                 "mean": 0.0,
@@ -78,6 +93,19 @@ class DataSynchronizer:
             }
 
         clean_series = spread_series.dropna()
+        if clean_series.empty:
+            return {
+                "count": 0,
+                "mean": 0.0,
+                "std": 0.0,
+                "u_minus_1s": 0.0,
+                "u_plus_1s": 0.0,
+                "u_minus_2s": 0.0,
+                "u_plus_2s": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "median": 0.0
+            }
         mean_val = float(clean_series.mean())
         std_val = float(clean_series.std(ddof=1)) if len(clean_series) > 1 else 0.0
 

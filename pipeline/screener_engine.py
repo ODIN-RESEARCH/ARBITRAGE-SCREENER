@@ -9,8 +9,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List, Optional
 import pandas as pd
+import numpy as np
 
-from pipeline.config import RAW_PAIRS_UNIVERSE, resolve_symbol_pair
+from pipeline.config import RAW_PAIRS_UNIVERSE, resolve_symbol_pair, build_full_universe
 from pipeline.hyperliquid_feed import HyperliquidFeed
 from pipeline.mt5_feed import MT5Feed
 from pipeline.synchronizer import DataSynchronizer
@@ -33,6 +34,9 @@ class ScreenerEngine:
         self._resolved_universe: List[Dict[str, Any]] = []
         self._pair_analysis_cache: Dict[str, Dict[str, Any]] = {}
         self._cache_ttl_sec = 60.0
+        self._screener_cache_rows: List[Dict[str, Any]] = []
+        self._screener_cache_time: float = 0.0
+        self._screener_cache_ttl: float = 2.0
         self._remote_ticks: Dict[str, Dict[str, Any]] = {}
         self._remote_candles: Dict[str, pd.DataFrame] = {}
 
@@ -73,19 +77,38 @@ class ScreenerEngine:
 
         # Resolve universe against broker's available symbols
         available_mt5 = self.mt5_feed.get_available_symbols()
-        self._resolved_universe = [
-            resolve_symbol_pair(p, available_mt5) for p in RAW_PAIRS_UNIVERSE
-        ]
+        try:
+            hl_contexts = self.hl_feed.get_meta_and_contexts()
+            hl_symbols = [k for k in hl_contexts.keys() if k.startswith("xyz:")]
+            if hl_symbols:
+                self._resolved_universe = build_full_universe(hl_symbols, available_mt5)
+                logger.info(f"Loaded {len(self._resolved_universe)} pairs dynamically from HyperLiquid xyz DEX.")
+            else:
+                self._resolved_universe = [resolve_symbol_pair(p, available_mt5) for p in RAW_PAIRS_UNIVERSE]
+        except Exception as e:
+            logger.warning(f"Could not load dynamic universe from HL, using raw universe: {e}")
+            self._resolved_universe = [resolve_symbol_pair(p, available_mt5) for p in RAW_PAIRS_UNIVERSE]
+
         self._initialized = True
         return True
 
-    def get_screener_table(self, category: str = "All") -> List[Dict[str, Any]]:
+    def get_screener_table(self, category: str = "All", force_refresh: bool = False) -> List[Dict[str, Any]]:
         """
         Polls live prices across Hyperliquid and MT5 for all universe pairs,
-        computing spreads, funding rates, and volume metrics.
+        computing spreads, funding rates, swap rates, and net carry metrics.
+        Micro-caches full snapshot for instant category switching.
         """
         if not self._initialized:
             self.initialize()
+
+        now = time.time()
+        if not force_refresh and (now - self._screener_cache_time < self._screener_cache_ttl) and self._screener_cache_rows:
+            rows = self._screener_cache_rows
+            if category == "Favorites":
+                return [r for r in rows if r.get("is_favorite", False)]
+            elif category != "All":
+                return [r for r in rows if r.get("category") == category]
+            return rows
 
         # 1. Fetch live contexts from Hyperliquid
         try:
@@ -94,37 +117,33 @@ class ScreenerEngine:
             logger.error(f"Error fetching Hyperliquid contexts: {e}")
             hl_contexts = {}
 
-        rows: List[Dict[str, Any]] = []
+        all_rows: List[Dict[str, Any]] = []
 
         for pair in self._resolved_universe:
-            # Filter by category if requested
-            if category == "Favorites" and not pair.get("is_favorite", False):
-                continue
-            elif category != "All" and category != "Favorites" and pair["category"] != category:
-                continue
-
             hl_sym = pair["hl_symbol"]
             mt5_sym = pair["mt5_symbol"]
 
             hl_ctx = hl_contexts.get(hl_sym) or hl_contexts.get(pair["symbol"]) or {}
             hl_mid = hl_ctx.get("mid_px")
             hl_oracle = hl_ctx.get("oracle_px")
-            funding_ann = hl_ctx.get("funding_rate_ann_pct", 0.0)
             ann_long = hl_ctx.get("ann_funding_long_pct", 0.0)
             ann_short = hl_ctx.get("ann_funding_short_pct", 0.0)
             volume_24h = hl_ctx.get("day_volume_usd", 0.0)
             open_interest = hl_ctx.get("open_interest_usd", 0.0)
 
-            # 2. Fetch live MT5 tick
-            mt5_tick = self.mt5_feed.get_tick(mt5_sym)
-            if not mt5_tick:
-                mt5_tick = self._remote_ticks.get(pair["symbol"]) or self._remote_ticks.get(mt5_sym)
-            
+            # 2. Fetch live MT5 tick and broker swap rates
+            mt5_tick = None
+            mt5_swap_long, mt5_swap_short = 0.0, 0.0
+            if pair.get("mt5_available", True):
+                mt5_tick = self.mt5_feed.get_tick(mt5_sym)
+                if not mt5_tick:
+                    mt5_tick = self._remote_ticks.get(pair["symbol"]) or self._remote_ticks.get(mt5_sym)
+                mt5_swap_long, mt5_swap_short = self.mt5_feed.get_swap_pct(mt5_sym)
+
             feed_source = "MT5"
             if mt5_tick and mt5_tick.get("mid"):
                 mt5_mid = mt5_tick["mid"]
             elif hl_oracle is not None:
-                # Cloud autonomous fallback: use Oracle benchmark price
                 mt5_mid = hl_oracle
                 feed_source = "Oracle"
             elif hl_mid is not None:
@@ -148,13 +167,23 @@ class ScreenerEngine:
                 oracle_spread = 0.0 if feed_source == "Oracle" else None
 
             # Funding Arbitrage capture yield:
-            # If funding is positive (longs pay shorts on HL), short HL and long MT5 -> capture +funding
-            # If funding is negative (shorts pay longs on HL), long HL and short MT5 -> capture -funding
-            funding_arbitrage = abs(funding_ann) if funding_ann != 0.0 else 0.0
+            funding_arb = round(ann_short, 2) if ann_short > 0 else round(ann_long, 2)
 
-            rows.append({
+            # Net Carry calculation incorporating broker overnight swap fees
+            net_carry_long_hl = ann_long + mt5_swap_short
+            net_carry_short_hl = ann_short + mt5_swap_long
+            best_net_carry = max(net_carry_long_hl, net_carry_short_hl)
+
+            if net_carry_short_hl > 0 and net_carry_short_hl >= net_carry_long_hl:
+                rec_text = "Short HL / Long MT5 earns carry"
+            elif net_carry_long_hl > 0:
+                rec_text = "Long HL / Short MT5 earns carry"
+            else:
+                rec_text = "No positive carry edge"
+
+            all_rows.append({
                 "symbol": pair["symbol"],
-                "label": pair["label"],
+                "label": pair.get("label", f"{pair['symbol']} ({hl_sym} / {mt5_sym})"),
                 "hl_symbol": hl_sym,
                 "mt5_symbol": mt5_sym,
                 "category": pair["category"],
@@ -168,12 +197,25 @@ class ScreenerEngine:
                 "oracle_spread": round(oracle_spread, 4) if oracle_spread is not None else None,
                 "ann_funding_long": round(ann_long, 2),
                 "ann_funding_short": round(ann_short, 2),
-                "funding_arbitrage": round(ann_short, 2) if ann_short > 0 else round(ann_long, 2),
+                "funding_arbitrage": funding_arb,
+                "mt5_swap_long": mt5_swap_long,
+                "mt5_swap_short": mt5_swap_short,
+                "net_carry_long": round(net_carry_long_hl, 2),
+                "net_carry_short": round(net_carry_short_hl, 2),
+                "net_carry_arbitrage": round(best_net_carry, 2),
+                "recommendation": rec_text,
                 "volume_24h_usd": volume_24h,
                 "open_interest_usd": open_interest
             })
 
-        return rows
+        self._screener_cache_rows = all_rows
+        self._screener_cache_time = now
+
+        if category == "Favorites":
+            return [r for r in all_rows if r.get("is_favorite", False)]
+        elif category != "All":
+            return [r for r in all_rows if r.get("category") == category]
+        return all_rows
 
     def get_pair_analysis(
         self,
@@ -276,6 +318,24 @@ class ScreenerEngine:
         else:
             oracle_spread = 0.0
 
+        # Broker Swaps & All-In Net Carry
+        mt5_swap_long, mt5_swap_short = 0.0, 0.0
+        if pair_cfg.get("mt5_available", True):
+            mt5_swap_long, mt5_swap_short = self.mt5_feed.get_swap_pct(mt5_sym)
+
+        ann_long = hl_ctx.get("ann_funding_long_pct", 0.0)
+        ann_short = hl_ctx.get("ann_funding_short_pct", 0.0)
+        net_carry_long_hl = ann_long + mt5_swap_short
+        net_carry_short_hl = ann_short + mt5_swap_long
+        best_net_carry = max(net_carry_long_hl, net_carry_short_hl)
+
+        if net_carry_short_hl > 0 and net_carry_short_hl >= net_carry_long_hl:
+            rec_text = "Short HL / Long MT5 earns carry"
+        elif net_carry_long_hl > 0:
+            rec_text = "Long HL / Short MT5 earns carry"
+        else:
+            rec_text = "No positive carry edge"
+
         result = {
             "pair": pair_cfg,
             "data_source": data_source,
@@ -283,9 +343,15 @@ class ScreenerEngine:
                 "current_spread": round(curr_spread, 4) if curr_spread is not None else None,
                 "current_spread_pct": round(curr_spread_pct, 4) if curr_spread_pct is not None else None,
                 "oracle_spread": round(oracle_spread, 4) if oracle_spread is not None else None,
-                "ann_funding_long": round(hl_ctx.get("ann_funding_long_pct", 0.0), 2),
-                "ann_funding_short": round(hl_ctx.get("ann_funding_short_pct", 0.0), 2),
-                "funding_arbitrage": round(hl_ctx.get("ann_funding_short_pct", 0.0), 2),
+                "ann_funding_long": round(ann_long, 2),
+                "ann_funding_short": round(ann_short, 2),
+                "funding_arbitrage": round(ann_short, 2) if ann_short > 0 else round(ann_long, 2),
+                "mt5_swap_long": mt5_swap_long,
+                "mt5_swap_short": mt5_swap_short,
+                "net_carry_long": round(net_carry_long_hl, 2),
+                "net_carry_short": round(net_carry_short_hl, 2),
+                "net_carry_arbitrage": round(best_net_carry, 2),
+                "recommendation": rec_text,
                 "volume_24h_usd": hl_ctx.get("day_volume_usd", 0.0),
                 "open_interest_usd": hl_ctx.get("open_interest_usd", 0.0),
                 "mt5_spread": mt5_tick["spread"] if mt5_tick else 0.0

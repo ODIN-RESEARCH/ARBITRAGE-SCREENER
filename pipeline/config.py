@@ -224,6 +224,120 @@ RAW_PAIRS_UNIVERSE = [
     }
 ]
 
+# Comprehensive category mappings for HyperLiquid xyz symbols
+CATEGORY_MAP = {
+    # FX
+    "EUR": "FX", "GBP": "FX", "JPY": "FX", "KRW": "FX", "AUD": "FX", "CAD": "FX", "CHF": "FX",
+    # Metals
+    "GOLD": "Metals", "SILVER": "Metals", "PLATINUM": "Metals", "PALLADIUM": "Metals", "COPPER": "Metals", "ALUMINIUM": "Metals",
+    # Indices
+    "SP500": "Indices", "JP225": "Indices", "XYZ100": "Indices", "DXY": "Indices", "KR200": "Indices", "VIX": "Indices",
+    "NIFTY": "Indices", "IBOV": "Indices", "SPCX": "Indices",
+    # Commodities
+    "CL": "Commodities", "WTIOIL": "Commodities", "BRENTOIL": "Commodities", "NATGAS": "Commodities", "CORN": "Commodities",
+    "WHEAT": "Commodities", "TTF": "Commodities", "HO": "Commodities", "URANIUM": "Commodities", "URNM": "Commodities",
+    # ETFs
+    "TLT": "ETFs", "SMH": "ETFs", "SOXL": "ETFs", "EWY": "ETFs", "EWJ": "ETFs", "EWZ": "ETFs", "EWT": "ETFs",
+    "XLE": "ETFs", "XBI": "ETFs", "MAGS": "ETFs", "KORU": "ETFs", "KSTR": "ETFs",
+}
+
+# Explicit broker fallback mappings for non-standard MT5 ticker names
+SPECIAL_MT5_ALIASES = {
+    "SP500": ["US500", "SP500", "SPX500", "USA500", "US500Cash"],
+    "JP225": ["JP225", "JPN225", "NIKKEI", "JP225Cash"],
+    "XYZ100": ["USTEC", "NAS100", "US100", "NDX", "USTECcash"],
+    "DXY": ["DXY_Z6", "DXY", "USDX", "USD_Index"],
+    "EUR": ["EURUSD", "EURUSD.raw", "EURUSD.pro"],
+    "GBP": ["GBPUSD", "GBPUSD.raw", "GBPUSD.pro"],
+    "JPY": ["USDJPY", "USDJPY.raw", "USDJPY.pro"],
+    "KRW": ["USDKRW"],
+    "GOLD": ["XAUUSD", "GOLD", "XAUUSD.raw"],
+    "SILVER": ["XAGUSD", "SILVER", "XAGUSD.raw"],
+    "PLATINUM": ["XPTUSD", "PLATINUM"],
+    "PALLADIUM": ["XPDUSD", "PALLADIUM"],
+    "CL": ["USOUSD", "WTI_X6", "WTI", "USOIL", "WTI_X6_CFD"],
+    "WTIOIL": ["USOUSD", "WTI_X6", "WTI", "USOIL", "WTI_X6_CFD"],
+    "BRENTOIL": ["UKOUSD", "BRENT_Z6", "BRENT", "UKOIL"],
+    "NATGAS": ["XNGUSD", "NATGAS", "GAS"],
+    "COPPER": ["COPPER", "XCUUSD", "HG"],
+    "CORN": ["Corn_Z6_CFD", "CORN", "CORN_Z6"],
+    "WHEAT": ["WheatZ6_CFD", "WHEAT", "WHEAT_Z6"],
+    "VIX": ["VIX_V6", "VIX_X6", "VIX"],
+    "GOOGL": ["GOOG.NAS", "GOOG.NAS-24", "GOOGL.NAS", "GOOGL"],
+    "XBI": ["XBIT.NAS", "XBIT.NAS-24", "XBI"],
+}
+
+FAVORITE_SYMBOLS = {
+    "SP500", "JP225", "XYZ100", "EUR", "GBP", "JPY", "GOLD", "SILVER",
+    "CL", "WTIOIL", "BRENTOIL", "NVDA", "TSLA", "AAPL", "MSFT", "PLTR", "COIN", "HOOD"
+}
+
+
+def build_full_universe(
+    hl_symbol_names: List[str],
+    available_mt5: Optional[Any] = None
+) -> List[Dict[str, Any]]:
+    """
+    Builds the complete universe from all live symbols on HyperLiquid xyz DEX,
+    automatically categorizing each and resolving against MT5's broker symbols.
+    """
+    results = []
+    seen = set()
+
+    for raw_name in hl_symbol_names:
+        hl_symbol = raw_name if raw_name.startswith("xyz:") else f"xyz:{raw_name}"
+        base = hl_symbol.replace("xyz:", "").strip()
+
+        if base in seen:
+            continue
+        seen.add(base)
+
+        category = CATEGORY_MAP.get(base, "Equities")
+        quote_ccy = "JPY" if base in ("JPY", "JP225") else "USD"
+        is_fav = base in FAVORITE_SYMBOLS
+
+        resolved_mt5 = None
+        if available_mt5:
+            # Check special aliases
+            if base in SPECIAL_MT5_ALIASES:
+                for cand in SPECIAL_MT5_ALIASES[base]:
+                    if cand in available_mt5:
+                        resolved_mt5 = cand
+                        break
+
+            # Check direct or standard CFD suffixes
+            if not resolved_mt5:
+                candidates = [
+                    base,
+                    f"{base}.NAS",
+                    f"{base}.NYSE",
+                    f"{base}.US",
+                    f"{base}.NAS-24",
+                    f"{base}.NYSE-24",
+                    f"{base}.O",
+                    f"{base}USD",
+                    f"USD{base}",
+                ]
+                for cand in candidates:
+                    if cand in available_mt5:
+                        resolved_mt5 = cand
+                        break
+
+        label = f"{base} ({hl_symbol} / {resolved_mt5})" if resolved_mt5 else f"{base} ({hl_symbol} / DEX Only)"
+
+        results.append({
+            "symbol": base,
+            "label": label,
+            "hl_symbol": hl_symbol,
+            "mt5_symbol": resolved_mt5 or base,
+            "mt5_available": bool(resolved_mt5),
+            "category": category,
+            "quote_ccy": quote_ccy,
+            "is_favorite": is_fav
+        })
+
+    return results
+
 
 def resolve_symbol_pair(
     pair_cfg: Dict[str, Any],

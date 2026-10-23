@@ -11,3 +11,5 @@ edge_profile/
 .venv
 env/
 venv/
+*.zip
+.vscode/

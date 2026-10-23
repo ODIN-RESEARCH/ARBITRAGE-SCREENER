@@ -15,18 +15,241 @@ let currentPairData = null;
 let currentBacktestResult = null;
 let currentTradePage = 1;
 const TRADES_PER_PAGE = 15;
+let fundingDisplayMode = "exchange"; // "exchange" or "net"
+
+// =============================================================================
+// Modern Toast Notification Popup System
+// =============================================================================
+const Toast = {
+  container: null,
+
+  init() {
+    this.container = document.getElementById("toast-container");
+    if (!this.container) {
+      this.container = document.createElement("div");
+      this.container.id = "toast-container";
+      this.container.className = "toast-container";
+      document.body.appendChild(this.container);
+    }
+  },
+
+  show(title, message, type = "info", duration = 3500) {
+    if (!this.container) this.init();
+
+    const toast = document.createElement("div");
+    toast.className = `toast-item toast-${type}`;
+
+    let iconSvg = "";
+    if (type === "success") {
+      iconSvg = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+    } else if (type === "error") {
+      iconSvg = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>`;
+    } else if (type === "warning") {
+      iconSvg = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>`;
+    } else {
+      iconSvg = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>`;
+    }
+
+    toast.innerHTML = `
+      <div class="toast-icon-wrap">${iconSvg}</div>
+      <div class="toast-content">
+        <div class="toast-title">${title}</div>
+        <div class="toast-msg">${message}</div>
+      </div>
+      <button class="toast-close-btn" onclick="Toast.dismiss(this.parentElement)">&times;</button>
+      <div class="toast-progress-bar" style="animation-duration: ${duration}ms;"></div>
+    `;
+
+    this.container.appendChild(toast);
+
+    const timer = setTimeout(() => {
+      this.dismiss(toast);
+    }, duration);
+
+    toast._timer = timer;
+    return toast;
+  },
+
+  dismiss(toast) {
+    if (!toast || toast.classList.contains("toast-hiding")) return;
+    clearTimeout(toast._timer);
+    toast.classList.add("toast-hiding");
+    setTimeout(() => {
+      if (toast.parentElement) {
+        toast.parentElement.removeChild(toast);
+      }
+    }, 280);
+  },
+
+  success(title, msg, dur) { return this.show(title, msg, "success", dur); },
+  info(title, msg, dur) { return this.show(title, msg, "info", dur); },
+  warning(title, msg, dur) { return this.show(title, msg, "warning", dur); },
+  error(title, msg, dur) { return this.show(title, msg, "error", dur); }
+};
+
+// =============================================================================
+// Smart Floating Financial Cell Detail Popover (Popup)
+// =============================================================================
+let popoverHideTimer = null;
+
+function showCellPopover(event, symbol, type) {
+  clearTimeout(popoverHideTimer);
+  const popover = document.getElementById("cell-detail-popover");
+  if (!popover) return;
+
+  const row = screenerRows.find(r => r.symbol === symbol);
+  if (!row) return;
+
+  let headerType = "Metric Details";
+  let contentHtml = "";
+
+  if (type === "spread") {
+    headerType = "Price & Spread Mechanics";
+    const hlMid = row.hl_mid !== null ? row.hl_mid.toLocaleString() : "--";
+    const mt5Mid = row.mt5_mid !== null ? row.mt5_mid.toLocaleString() : "--";
+    const spreadStr = row.current_spread !== null ? `${row.current_spread > 0 ? "+" : ""}${row.current_spread.toFixed(2)}` : "--";
+    const spreadPct = row.current_spread_pct !== null ? `${row.current_spread_pct > 0 ? "+" : ""}${row.current_spread_pct.toFixed(2)}%` : "--";
+    const oracleMid = row.hl_oracle !== null ? row.hl_oracle.toLocaleString() : "--";
+    const oracleSpread = row.oracle_spread !== null ? `${row.oracle_spread > 0 ? "+" : ""}${row.oracle_spread.toFixed(2)}` : "--";
+
+    contentHtml = `
+      <div class="popover-row">
+        <span class="popover-label">HyperLiquid Mid</span>
+        <span class="popover-val">${hlMid}</span>
+      </div>
+      <div class="popover-row">
+        <span class="popover-label">MetaTrader 5 Mid</span>
+        <span class="popover-val">${mt5Mid}</span>
+      </div>
+      <div class="popover-row">
+        <span class="popover-label">Current Spread (HL - MT5)</span>
+        <span class="popover-val" style="color: ${row.current_spread > 0 ? '#10b981' : '#ef4444'};">${spreadStr}</span>
+      </div>
+      <div class="popover-row">
+        <span class="popover-label">Spread %</span>
+        <span class="popover-val" style="color: ${row.current_spread_pct > 0 ? '#10b981' : '#ef4444'};">${spreadPct}</span>
+      </div>
+      <div class="popover-divider"></div>
+      <div class="popover-row">
+        <span class="popover-label">HyperLiquid Oracle</span>
+        <span class="popover-val">${oracleMid}</span>
+      </div>
+      <div class="popover-row">
+        <span class="popover-label">Oracle Spread</span>
+        <span class="popover-val">${oracleSpread}</span>
+      </div>
+    `;
+  } else if (type === "funding") {
+    headerType = fundingDisplayMode === "net" ? "Net Carry & Broker Swaps" : "Exchange Perpetual Funding";
+    const fLong = `${row.ann_funding_long > 0 ? "+" : ""}${row.ann_funding_long.toFixed(2)}%`;
+    const fShort = `${row.ann_funding_short > 0 ? "+" : ""}${row.ann_funding_short.toFixed(2)}%`;
+    const swapLong = `${row.mt5_swap_long > 0 ? "+" : ""}${(row.mt5_swap_long || 0).toFixed(2)}%`;
+    const swapShort = `${row.mt5_swap_short > 0 ? "+" : ""}${(row.mt5_swap_short || 0).toFixed(2)}%`;
+    const netLong = `${row.net_carry_long > 0 ? "+" : ""}${(row.net_carry_long || 0).toFixed(2)}%`;
+    const netShort = `${row.net_carry_short > 0 ? "+" : ""}${(row.net_carry_short || 0).toFixed(2)}%`;
+
+    contentHtml = `
+      <div class="popover-row">
+        <span class="popover-label">HL Perp Funding (Long / Short)</span>
+        <span class="popover-val">${fLong} / ${fShort}</span>
+      </div>
+      <div class="popover-row">
+        <span class="popover-label">MT5 Broker Swaps (Long / Short)</span>
+        <span class="popover-val">${swapLong} / ${swapShort}</span>
+      </div>
+      <div class="popover-divider"></div>
+      <div class="popover-row">
+        <span class="popover-label">Strategy 1: Long HL / Short MT5</span>
+        <span class="popover-val" style="color: ${row.net_carry_long > 0 ? '#10b981' : '#ef4444'};">${netLong}</span>
+      </div>
+      <div class="popover-row">
+        <span class="popover-label">Strategy 2: Short HL / Long MT5</span>
+        <span class="popover-val" style="color: ${row.net_carry_short > 0 ? '#10b981' : '#ef4444'};">${netShort}</span>
+      </div>
+      <div class="popover-rec-box">
+        <strong>Recommendation:</strong> ${row.recommendation || 'No positive carry edge'}
+      </div>
+    `;
+  } else if (type === "volume") {
+    headerType = "Market Depth & Volume";
+    const vol = formatCurrency(row.volume_24h_usd);
+    const oi = formatCurrency(row.open_interest_usd);
+
+    contentHtml = `
+      <div class="popover-row">
+        <span class="popover-label">HyperLiquid 24h Volume</span>
+        <span class="popover-val" style="color: #38bdf8;">${vol}</span>
+      </div>
+      <div class="popover-row">
+        <span class="popover-label">Open Interest (USD)</span>
+        <span class="popover-val">${oi}</span>
+      </div>
+      <div class="popover-row">
+        <span class="popover-label">Execution Venue</span>
+        <span class="popover-val">${row.hl_symbol} (Mainnet L1)</span>
+      </div>
+    `;
+  }
+
+  popover.innerHTML = `
+    <div class="popover-header">
+      <div class="popover-title-row">
+        <span class="popover-symbol">${row.symbol}</span>
+        <span class="popover-tag">${row.category || 'Asset'}</span>
+      </div>
+      <div class="popover-type">${headerType}</div>
+    </div>
+    <div class="popover-body">
+      ${contentHtml}
+    </div>
+  `;
+
+  popover.style.display = "block";
+  positionPopover(event.clientX, event.clientY);
+}
+
+function positionPopover(x, y) {
+  const popover = document.getElementById("cell-detail-popover");
+  if (!popover || popover.style.display === "none") return;
+
+  const width = 320;
+  const height = popover.offsetHeight || 180;
+  const padding = 15;
+
+  let left = x + 16;
+  let top = y + 16;
+
+  // Viewport bounds check so popover never clips off screen
+  if (left + width > window.innerWidth - padding) {
+    left = x - width - 16;
+  }
+  if (top + height > window.innerHeight - padding) {
+    top = window.innerHeight - height - padding;
+  }
+  if (top < padding) top = padding;
+
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+}
+
+function hideCellPopover() {
+  popoverHideTimer = setTimeout(() => {
+    const popover = document.getElementById("cell-detail-popover");
+    if (popover) popover.style.display = "none";
+  }, 80);
+}
 
 // Initialization
 document.addEventListener("DOMContentLoaded", () => {
+  checkVenueConnection();
   fetchPairsList();
   fetchScreenerData();
 
-  // Route by URL hash if present
-  if (window.location.hash === "#pair-analysis") {
-    showView("pair-analysis");
-  } else {
-    showView("screener");
+  // Always default to Arbitrage Screener on fresh load (clean any stale backtester hash)
+  if (window.location.hash) {
+    history.replaceState(null, "", window.location.pathname);
   }
+  showView("screener");
 
   window.addEventListener("hashchange", () => {
     const hash = window.location.hash.replace("#", "");
@@ -46,12 +269,24 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Auto-refresh screener every 15s in background
+  // Close modals on Escape key
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      closeVenueModal();
+      closeTradeModal();
+    }
+  });
+
+  // Auto-refresh screener every 15s in background & check connection every 30s
   setInterval(() => {
     if (currentView === "screener") {
       fetchScreenerData(true);
     }
   }, 15000);
+
+  setInterval(() => {
+    checkVenueConnection();
+  }, 30000);
 });
 
 // View Navigation
@@ -69,6 +304,10 @@ function showView(viewName) {
     document.getElementById("nav-pair-analysis").classList.add("active");
     if (selectedSymbol && !currentPairData) {
       loadSelectedPair();
+    } else {
+      setTimeout(() => {
+        if (typeof resizeAllCharts === "function") resizeAllCharts();
+      }, 50);
     }
   }
 }
@@ -85,16 +324,28 @@ function setCategory(cat) {
   fetchScreenerData();
 }
 
-async function fetchScreenerData(isBackground = false) {
+async function fetchScreenerData(isBackground = false, forceRefresh = false) {
+  const refreshBtn = document.querySelector(".btn-refresh");
+  if (refreshBtn && forceRefresh) {
+    refreshBtn.classList.add("loading");
+  }
   try {
-    const res = await fetch(`/api/screener?category=${encodeURIComponent(currentCategory)}`);
+    const url = `/api/screener?category=${encodeURIComponent(currentCategory)}${forceRefresh ? '&refresh=true' : ''}`;
+    const res = await fetch(url);
     const json = await res.json();
     if (json.success) {
       screenerRows = json.data;
       renderScreenerTable();
+      if (forceRefresh) {
+        Toast.success("Screener Refreshed", `${screenerRows.length} pairs synced with HyperLiquid & MT5 live feeds`);
+      }
     }
   } catch (err) {
     console.error("Failed to fetch screener data:", err);
+  } finally {
+    if (refreshBtn) {
+      setTimeout(() => refreshBtn.classList.remove("loading"), 300);
+    }
   }
 }
 
@@ -106,26 +357,124 @@ function formatCurrency(val) {
   return `$${val.toFixed(0)}`;
 }
 
+function setFundingDisplayMode(mode) {
+  const prevMode = fundingDisplayMode;
+  fundingDisplayMode = mode;
+
+  // Sync button active classes across both screener and pair analysis views
+  const updateBtns = (containerId) => {
+    const cont = document.getElementById(containerId);
+    if (!cont) return;
+    cont.querySelectorAll(".mode-toggle-btn").forEach(btn => {
+      const isNet = btn.id.toLowerCase().includes("net");
+      btn.classList.toggle("active", mode === "net" ? isNet : !isNet);
+    });
+  };
+  updateBtns("screener-mode-toggle");
+  updateBtns("pair-mode-toggle");
+
+  // Update screener table header text
+  const thAnnFunding = document.getElementById("th-ann-funding");
+  const thFundingArb = document.getElementById("th-funding-arb");
+  if (thAnnFunding) {
+    thAnnFunding.innerText = mode === "net" ? "⇅ Net Carry (Long / Short)" : "⇅ Ann. Funding (Long / Short)";
+  }
+  if (thFundingArb) {
+    thFundingArb.innerText = mode === "net" ? "⇅ Net Carry Arbitrage" : "⇅ Funding Arbitrage";
+  }
+
+  // Refresh screener table
+  renderScreenerTable();
+
+  // Refresh Pair Analysis KPI ribbon if loaded
+  if (currentPairData && currentPairData.metrics) {
+    renderPairFundingKPIs(currentPairData.metrics);
+  }
+
+  if (prevMode !== mode) {
+    if (mode === "net") {
+      Toast.info("Net Carry Mode Active", "Arbitrage yields now factor in MT5 broker overnight financing swaps.");
+    } else {
+      Toast.info("Exchange Funding Active", "Arbitrage yields now show raw HyperLiquid perpetual funding rates.");
+    }
+  }
+}
+
+function renderPairFundingKPIs(m) {
+  if (!m) return;
+  const titleLS = document.getElementById("kpi-title-funding-ls");
+  const titleArb = document.getElementById("kpi-title-funding-arb");
+  const valLS = document.getElementById("kpi-funding-ls");
+  const valArb = document.getElementById("kpi-funding-arb");
+  const subArb = document.getElementById("kpi-funding-sub");
+
+  if (fundingDisplayMode === "net") {
+    if (titleLS) titleLS.innerText = "Net Carry (Long / Short)";
+    if (titleArb) titleArb.innerText = "Net Carry Arbitrage";
+
+    const netLong = m.net_carry_long !== undefined ? m.net_carry_long : (m.ann_funding_long + (m.mt5_swap_short || 0));
+    const netShort = m.net_carry_short !== undefined ? m.net_carry_short : (m.ann_funding_short + (m.mt5_swap_long || 0));
+    const netArb = m.net_carry_arbitrage !== undefined ? m.net_carry_arbitrage : Math.max(netLong, netShort);
+
+    if (valLS) valLS.innerText = `${netLong > 0 ? "+" : ""}${netLong.toFixed(2)}% / ${netShort > 0 ? "+" : ""}${netShort.toFixed(2)}%`;
+    if (valArb) {
+      valArb.innerText = `${netArb > 0 ? "+" : ""}${netArb.toFixed(2)}%`;
+      valArb.className = `kpi-value ${netArb > 0 ? "pos" : (netArb < 0 ? "neg" : "")}`;
+    }
+    if (subArb) {
+      const swapInfo = `MT5 swaps: L ${m.mt5_swap_long > 0 ? "+" : ""}${(m.mt5_swap_long || 0).toFixed(2)}% / S ${m.mt5_swap_short > 0 ? "+" : ""}${(m.mt5_swap_short || 0).toFixed(2)}%`;
+      subArb.innerText = `${m.recommendation || ''} (${swapInfo})`;
+      subArb.style.display = "block";
+    }
+  } else {
+    if (titleLS) titleLS.innerText = "Ann. Funding (Long / Short)";
+    if (titleArb) titleArb.innerText = "Funding Arbitrage";
+
+    const annLong = m.ann_funding_long !== undefined ? m.ann_funding_long : 0;
+    const annShort = m.ann_funding_short !== undefined ? m.ann_funding_short : 0;
+    const arbVal = m.funding_arbitrage !== undefined ? m.funding_arbitrage : (annShort > 0 ? annShort : annLong);
+
+    if (valLS) valLS.innerText = `${annLong > 0 ? "+" : ""}${annLong.toFixed(2)}% / ${annShort > 0 ? "+" : ""}${annShort.toFixed(2)}%`;
+    if (valArb) {
+      valArb.innerText = `${arbVal > 0 ? "+" : ""}${arbVal.toFixed(2)}%`;
+      valArb.className = `kpi-value ${arbVal > 0 ? "pos" : (arbVal < 0 ? "neg" : "")}`;
+    }
+    if (subArb) {
+      subArb.innerText = "";
+      subArb.style.display = "none";
+    }
+  }
+}
+
 function renderScreenerTable() {
   const tbody = document.getElementById("screener-tbody");
   tbody.innerHTML = "";
+
+  const isNet = (fundingDisplayMode === "net");
 
   // Filter rows
   let filtered = screenerRows.filter(r => {
     for (const [key, val] of Object.entries(columnFilters)) {
       if (!val) continue;
       const filterStr = val.trim().toLowerCase();
+      let targetKey = key;
+      if (isNet) {
+        if (key === "ann_funding") targetKey = "net_carry_long";
+        if (key === "funding_arbitrage") targetKey = "net_carry_arbitrage";
+      } else {
+        if (key === "ann_funding") targetKey = "ann_funding_long";
+      }
 
       if (filterStr.startsWith(">") || filterStr.startsWith("<")) {
         const op = filterStr[0];
         const targetVal = parseFloat(filterStr.slice(1).trim());
-        const cellVal = parseFloat(r[key]);
+        const cellVal = parseFloat(r[targetKey]);
         if (!isNaN(targetVal) && !isNaN(cellVal)) {
           if (op === ">" && cellVal <= targetVal) return false;
           if (op === "<" && cellVal >= targetVal) return false;
         }
       } else {
-        const cellStr = String(r[key] || "").toLowerCase();
+        const cellStr = String(r[targetKey] || "").toLowerCase();
         if (!cellStr.includes(filterStr)) return false;
       }
     }
@@ -134,8 +483,13 @@ function renderScreenerTable() {
 
   // Sort rows
   filtered.sort((a, b) => {
-    let va = a[sortCol];
-    let vb = b[sortCol];
+    let effectiveSortCol = sortCol;
+    if (isNet) {
+      if (sortCol === "ann_funding_long") effectiveSortCol = "net_carry_long";
+      if (sortCol === "funding_arbitrage") effectiveSortCol = "net_carry_arbitrage";
+    }
+    let va = a[effectiveSortCol];
+    let vb = b[effectiveSortCol];
     if (va === null || va === undefined) return 1;
     if (vb === null || vb === undefined) return -1;
     if (typeof va === "string") {
@@ -154,20 +508,28 @@ function renderScreenerTable() {
     const spdStr = r.current_spread !== null ? `${r.current_spread > 0 ? "+" : ""}${r.current_spread.toFixed(2)}` : "--";
     const spdPctStr = r.current_spread_pct !== null ? `${r.current_spread_pct > 0 ? "+" : ""}${r.current_spread_pct.toFixed(2)}%` : "--";
     const orcStr = r.oracle_spread !== null ? `${r.oracle_spread > 0 ? "+" : ""}${r.oracle_spread.toFixed(2)}` : "--";
-    const fundingLSStr = `${r.ann_funding_long > 0 ? "+" : ""}${r.ann_funding_long.toFixed(2)}% / ${r.ann_funding_short > 0 ? "+" : ""}${r.ann_funding_short.toFixed(2)}%`;
-    const fundingArbStr = `${r.funding_arbitrage > 0 ? "+" : ""}${r.funding_arbitrage.toFixed(2)}%`;
-    const fundingArbClass = r.funding_arbitrage > 0 ? "pos" : (r.funding_arbitrage < 0 ? "neg" : "");
+
+    const fLong = isNet ? (r.net_carry_long !== undefined ? r.net_carry_long : r.ann_funding_long) : r.ann_funding_long;
+    const fShort = isNet ? (r.net_carry_short !== undefined ? r.net_carry_short : r.ann_funding_short) : r.ann_funding_short;
+    const fArb = isNet ? (r.net_carry_arbitrage !== undefined ? r.net_carry_arbitrage : r.funding_arbitrage) : r.funding_arbitrage;
+
+    const fundingLSStr = `${fLong > 0 ? "+" : ""}${fLong.toFixed(2)}% / ${fShort > 0 ? "+" : ""}${fShort.toFixed(2)}%`;
+    const fundingArbStr = `${fArb > 0 ? "+" : ""}${fArb.toFixed(2)}%`;
+    const fundingArbClass = fArb > 0 ? "pos" : (fArb < 0 ? "neg" : "");
+    const titleTooltip = isNet
+      ? `title="MT5 Broker Swaps: Long ${(r.mt5_swap_long || 0).toFixed(2)}% / Short ${(r.mt5_swap_short || 0).toFixed(2)}% | ${r.recommendation || ''}"`
+      : `title="HyperLiquid Raw Exchange Funding (Hourly annualized)"`;
 
     tr.innerHTML = `
-      <td><span class="star-icon ${r.is_favorite ? 'active' : ''}" onclick="toggleFavorite('${r.symbol}')">★</span></td>
-      <td style="font-weight: 600;">${r.symbol}</td>
-      <td class="num-cell ${spreadClass}">${spdStr}</td>
-      <td class="num-cell ${spreadPctClass}">${spdPctStr}</td>
-      <td class="num-cell ${oracleClass}">${orcStr}</td>
-      <td class="num-cell">${fundingLSStr}</td>
-      <td class="num-cell ${fundingArbClass}">${fundingArbStr}</td>
-      <td class="num-cell">${formatCurrency(r.volume_24h_usd)}</td>
-      <td class="num-cell">${formatCurrency(r.open_interest_usd)}</td>
+      <td><span class="star-icon ${r.is_favorite ? 'active' : ''}" onclick="toggleFavorite('${r.symbol}')" title="Click to favorite">★</span></td>
+      <td style="font-weight: 600; cursor: pointer;" onclick="openPairAnalysis('${r.symbol}')" onmouseenter="showCellPopover(event, '${r.symbol}', 'spread')" onmousemove="positionPopover(event.clientX, event.clientY)" onmouseleave="hideCellPopover()">${r.symbol}</td>
+      <td class="num-cell ${spreadClass}" onmouseenter="showCellPopover(event, '${r.symbol}', 'spread')" onmousemove="positionPopover(event.clientX, event.clientY)" onmouseleave="hideCellPopover()">${spdStr}</td>
+      <td class="num-cell ${spreadPctClass}" onmouseenter="showCellPopover(event, '${r.symbol}', 'spread')" onmousemove="positionPopover(event.clientX, event.clientY)" onmouseleave="hideCellPopover()">${spdPctStr}</td>
+      <td class="num-cell ${oracleClass}" onmouseenter="showCellPopover(event, '${r.symbol}', 'spread')" onmousemove="positionPopover(event.clientX, event.clientY)" onmouseleave="hideCellPopover()">${orcStr}</td>
+      <td class="num-cell" onmouseenter="showCellPopover(event, '${r.symbol}', 'funding')" onmousemove="positionPopover(event.clientX, event.clientY)" onmouseleave="hideCellPopover()">${fundingLSStr}</td>
+      <td class="num-cell ${fundingArbClass}" onmouseenter="showCellPopover(event, '${r.symbol}', 'funding')" onmousemove="positionPopover(event.clientX, event.clientY)" onmouseleave="hideCellPopover()">${fundingArbStr}</td>
+      <td class="num-cell" onmouseenter="showCellPopover(event, '${r.symbol}', 'volume')" onmousemove="positionPopover(event.clientX, event.clientY)" onmouseleave="hideCellPopover()">${formatCurrency(r.volume_24h_usd)}</td>
+      <td class="num-cell" onmouseenter="showCellPopover(event, '${r.symbol}', 'volume')" onmousemove="positionPopover(event.clientX, event.clientY)" onmouseleave="hideCellPopover()">${formatCurrency(r.open_interest_usd)}</td>
       <td style="text-align: right;">
         <button class="btn-view-details" onclick="openPairAnalysis('${r.symbol}')">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -183,9 +545,14 @@ function renderScreenerTable() {
   });
 }
 
+let filterDebounceTimer = null;
+
 function applyFilters(column, value) {
   columnFilters[column] = value;
-  renderScreenerTable();
+  clearTimeout(filterDebounceTimer);
+  filterDebounceTimer = setTimeout(() => {
+    renderScreenerTable();
+  }, 100);
 }
 
 function sortTable(column) {
@@ -203,6 +570,11 @@ function toggleFavorite(symbol) {
   if (row) {
     row.is_favorite = !row.is_favorite;
     renderScreenerTable();
+    if (row.is_favorite) {
+      Toast.success("Favorite Added", `${symbol} added to your Favorites watchlist`);
+    } else {
+      Toast.info("Favorite Removed", `${symbol} removed from Favorites`);
+    }
   }
 }
 
@@ -218,6 +590,16 @@ function togglePairDropdown() {
     input.value = "";
     filterPairDropdown("");
     setTimeout(() => input.focus(), 50);
+  }
+}
+
+function handleDropdownKey(e) {
+  if (e.key === "Escape") {
+    const menu = document.getElementById("pair-dropdown-menu");
+    if (menu) menu.classList.remove("open");
+  } else if (e.key === "Enter") {
+    const first = document.querySelector("#pair-options-container .dropdown-option");
+    if (first) first.click();
   }
 }
 
@@ -283,33 +665,53 @@ function openPairAnalysis(symbol) {
   }
   showView("pair-analysis");
   loadSelectedPair();
+  Toast.info("Pair Analysis", `Loaded historical spread & backtest charts for ${symbol}`, 2200);
 }
+
+const RELOAD_BTN_DEFAULT_HTML = `
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+    <path d="M23 4v6h-6"></path>
+    <path d="M1 20v-6h6"></path>
+    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+  </svg>
+  Reload
+`;
+
+const RUN_BACKTEST_DEFAULT_HTML = `▶ Run Backtest`;
+
+let currentPairLoadReqId = 0;
 
 // -----------------------------------------------------------------------------
 // Pair Analysis Loader & Renderer (Images 2, 3, 4, 5)
 // -----------------------------------------------------------------------------
 
-async function loadSelectedPair() {
+async function loadSelectedPair(forceRefresh = false) {
   if (!selectedSymbol) return;
 
+  const reqId = ++currentPairLoadReqId;
   const reloadBtn = document.getElementById("btn-reload-pair");
-  const origBtnContent = reloadBtn.innerHTML;
-  reloadBtn.innerHTML = `
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin">
-      <path d="M23 4v6h-6"></path>
-      <path d="M1 20v-6h6"></path>
-      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-    </svg> Loading...
-  `;
-  reloadBtn.style.opacity = "0.75";
-  reloadBtn.disabled = true;
+  if (reloadBtn) {
+    reloadBtn.innerHTML = `
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spinner-svg">
+        <path d="M23 4v6h-6"></path>
+        <path d="M1 20v-6h6"></path>
+        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+      </svg>
+      Loading...
+    `;
+    reloadBtn.style.opacity = "0.75";
+    reloadBtn.disabled = true;
+  }
 
   const tf = document.getElementById("timeframe-select").value;
   const lookback = document.getElementById("lookback-select").value;
 
   try {
-    const res = await fetch(`/api/pair-analysis?symbol=${encodeURIComponent(selectedSymbol)}&timeframe=${tf}&lookback_hours=${lookback}`);
+    const res = await fetch(`/api/pair-analysis?symbol=${encodeURIComponent(selectedSymbol)}&timeframe=${tf}&lookback_hours=${lookback}${forceRefresh ? '&refresh=true' : ''}`);
     const json = await res.json();
+    
+    // Ignore outdated responses if another setting was picked
+    if (reqId !== currentPairLoadReqId) return;
     if (!json.success) return;
 
     currentPairData = json;
@@ -330,8 +732,6 @@ async function loadSelectedPair() {
     const spdStr = m.current_spread !== null ? `${m.current_spread > 0 ? "+" : ""}${m.current_spread.toFixed(2)}` : "--";
     const spdPctStr = m.current_spread_pct !== null ? `${m.current_spread_pct > 0 ? "+" : ""}${m.current_spread_pct.toFixed(2)}%` : "--";
     const orcStr = m.oracle_spread !== null ? `${m.oracle_spread > 0 ? "+" : ""}${m.oracle_spread.toFixed(2)}` : "--";
-    const fundingLSStr = `${m.ann_funding_long > 0 ? "+" : ""}${m.ann_funding_long.toFixed(2)}% / ${m.ann_funding_short > 0 ? "+" : ""}${m.ann_funding_short.toFixed(2)}%`;
-    const fundingArbStr = `${m.funding_arbitrage > 0 ? "+" : ""}${m.funding_arbitrage.toFixed(2)}%`;
 
     const kpiSpreadEl = document.getElementById("kpi-spread");
     kpiSpreadEl.innerText = spdStr;
@@ -345,11 +745,8 @@ async function loadSelectedPair() {
     kpiOracleEl.innerText = orcStr;
     kpiOracleEl.className = `kpi-value ${m.oracle_spread > 0 ? "pos" : (m.oracle_spread < 0 ? "neg" : "")}`;
 
-    document.getElementById("kpi-funding-ls").innerText = fundingLSStr;
-    
-    const kpiArbEl = document.getElementById("kpi-funding-arb");
-    kpiArbEl.innerText = fundingArbStr;
-    kpiArbEl.className = `kpi-value ${m.funding_arbitrage > 0 ? "pos" : (m.funding_arbitrage < 0 ? "neg" : "")}`;
+    // Render Ann. Funding or Net Carry based on active toggle
+    renderPairFundingKPIs(m);
 
     document.getElementById("kpi-volume").innerText = formatCurrency(m.volume_24h_usd);
     document.getElementById("kpi-oi").innerText = formatCurrency(m.open_interest_usd);
@@ -364,7 +761,15 @@ async function loadSelectedPair() {
     const startTimeStr = c.times[0] ? c.times[0].replace("T", " ").slice(0, 16) : "";
     const endTimeStr = c.times[c.count - 1] ? c.times[c.count - 1].replace("T", " ").slice(0, 16) : "";
     const sourceTag = json.data_source === "AUTONOMOUS_ORACLE" ? " (Oracle Benchmark)" : (json.data_source === "MT5_REMOTE" ? " (MT5 Synced)" : "");
-    document.getElementById("aligned-bars-info").innerText = `${c.count.toLocaleString()} aligned ${tf} bars | ${startTimeStr} -> ${endTimeStr} UTC${sourceTag}`;
+    let infoText = `${c.count.toLocaleString()} aligned ${tf} bars | ${startTimeStr} -> ${endTimeStr} UTC${sourceTag}`;
+    
+    const lbSelect = document.getElementById("lookback-select");
+    const lbHours = parseInt(lbSelect ? lbSelect.value : "48");
+    const lbLabel = lbSelect ? lbSelect.options[lbSelect.selectedIndex].text : "";
+    if (tf === "1m" && lbHours > 72 && c.count > 0) {
+      infoText += ` • (Note: Exchange retains max ~5,000 1m candles [~3.5 days]. For full ${lbLabel} view, select 15m or 1h timeframe)`;
+    }
+    document.getElementById("aligned-bars-info").innerText = infoText;
 
     // Render 3 Charts (using high-performance Plotly)
     renderClosePricesChart("chart-close-prices", c.times, c.hl_close, c.mt5_close, p.hl_symbol, p.mt5_symbol);
@@ -384,44 +789,92 @@ async function loadSelectedPair() {
     reloadBtn.style.opacity = "1";
     reloadBtn.disabled = false;
 
-    // Asynchronously populate cost estimation and backtesting in background
-    setTimeout(async () => {
-      try {
-        const refPx = (c.hl_close.length > 0 ? c.hl_close[c.hl_close.length - 1] : 48207);
-        document.getElementById("cost-ref-price").value = Math.round(refPx);
-        document.getElementById("cost-mt5-spread").value = Math.round(m.mt5_spread || 4);
-        await applyCostEstimation();
+    // Auto-populate default spread entry/exit levels for the updated window
+    if (s.std > 0) {
+      const buyEnt = s.mean - (1.0 * s.std);
+      const buyEx = s.mean;
+      const sellEnt = s.mean + (1.0 * s.std);
+      const sellEx = s.mean;
 
-        if (s.std > 0) {
-          const buyEnt = Math.round(s.mean - (1.0 * s.std));
-          const buyEx = Math.round(s.mean);
-          const sellEnt = Math.round(s.mean + (1.0 * s.std));
-          const sellEx = Math.round(s.mean);
+      const formatLevel = (val) => {
+        const absStd = Math.abs(s.std);
+        if (absStd < 0.005) return Number(val.toFixed(6));
+        if (absStd < 0.1) return Number(val.toFixed(4));
+        if (absStd < 10.0) return Number(val.toFixed(2));
+        return Math.round(val);
+      };
 
-          document.getElementById("bt-buy-entry").value = buyEnt;
-          document.getElementById("bt-buy-exit").value = buyEx;
-          document.getElementById("bt-sell-entry").value = sellEnt;
-          document.getElementById("bt-sell-exit").value = sellEx;
-        }
+      let bEnt = formatLevel(buyEnt);
+      let bEx = formatLevel(buyEx);
+      let sEnt = formatLevel(sellEnt);
+      let sEx = formatLevel(sellEx);
 
-        await runBacktest();
-      } catch (err) {
-        console.error("Async backtest update error:", err);
+      // Guard against precision collapse
+      if (bEnt >= bEx) {
+        bEnt = Number(buyEnt.toFixed(6));
+        bEx = Number(buyEx.toFixed(6));
       }
-    }, 10);
+      if (sEnt <= sEx) {
+        sEnt = Number(sellEnt.toFixed(6));
+        sEx = Number(sellEx.toFixed(6));
+      }
+
+      document.getElementById("bt-buy-entry").value = bEnt;
+      document.getElementById("bt-buy-exit").value = bEx;
+      document.getElementById("bt-sell-entry").value = sEnt;
+      document.getElementById("bt-sell-exit").value = sEx;
+    }
+
+    // Do NOT run backtest automatically.
+    // Timeframe and Lookback changes only load the 3 graphs.
+    // Backtest runs ONLY when the user clicks 'Run Backtest'.
+    resetBacktestState();
 
   } catch (err) {
     console.error("Failed to load pair analysis:", err);
   } finally {
-    reloadBtn.innerHTML = origBtnContent;
-    reloadBtn.style.opacity = "1";
-    reloadBtn.disabled = false;
+    if (reloadBtn && reqId === currentPairLoadReqId) {
+      reloadBtn.innerHTML = RELOAD_BTN_DEFAULT_HTML;
+      reloadBtn.style.opacity = "1";
+      reloadBtn.disabled = false;
+    }
   }
 }
 
 // -----------------------------------------------------------------------------
 // Backtester Functions (Image 5)
 // -----------------------------------------------------------------------------
+
+function resetBacktestState() {
+  currentBacktestResult = null;
+  const badge = document.getElementById("bt-status-badge");
+  if (badge) {
+    badge.innerHTML = `<span class="bt-summary-stats-text" style="color: var(--text-muted); font-style: italic;">Click "▶ Run Backtest" to simulate strategy</span>`;
+  }
+  const kpiIds = ["bt-kpi-trades", "bt-kpi-winrate", "bt-kpi-gross", "bt-kpi-comm", "bt-kpi-avg", "bt-kpi-dd"];
+  kpiIds.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.innerText = "--";
+  });
+  const winrateSubEl = document.getElementById("bt-kpi-winrate-sub");
+  if (winrateSubEl) winrateSubEl.innerText = "";
+
+  const eqChart = document.getElementById("chart-equity-curve");
+  if (eqChart && window.Plotly) {
+    Plotly.purge(eqChart);
+  }
+  const stChart = document.getElementById("chart-spread-trades");
+  if (stChart && window.Plotly) {
+    Plotly.purge(stChart);
+  }
+
+  const tbody = document.getElementById("bt-trades-tbody");
+  if (tbody) {
+    tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 22px;">Click "▶ Run Backtest" to simulate trades for the current window.</td></tr>`;
+  }
+  const pageInfo = document.getElementById("bt-page-info");
+  if (pageInfo) pageInfo.innerText = "0 / 0";
+}
 
 async function applyCostEstimation() {
   const hlFeePct = parseFloat(document.getElementById("cost-hl-fee").value) || 0.01;
@@ -448,6 +901,7 @@ async function applyCostEstimation() {
       document.getElementById("cost-formula-display").innerText = 
         `Estimated cost / side = ${d.total_cost_per_side.toFixed(4)} = HL fee ${d.hl_fee_cost.toFixed(4)} + MT5 spread ${d.mt5_half_spread.toFixed(4)} + MT5 fee ${d.mt5_fee.toFixed(4)}`;
       document.getElementById("bt-cost-side").value = d.total_cost_per_side.toFixed(4);
+      Toast.success("Friction Applied", `Applied ${d.total_cost_per_side.toFixed(4)} spread units to Cost/side`);
     }
   } catch (err) {
     console.error("Cost estimation error:", err);
@@ -458,7 +912,13 @@ async function runBacktest() {
   if (!selectedSymbol) return;
 
   const btn = document.querySelector(".btn-run-backtest");
-  if (btn) btn.style.opacity = "0.7";
+  const origText = btn ? btn.innerHTML : "▶ Run Backtest";
+  if (btn) {
+    btn.innerHTML = `<svg class="spinner-svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-linecap="round"></circle></svg> Running...`;
+    btn.disabled = true;
+    btn.style.opacity = "0.75";
+    btn.classList.add("running");
+  }
 
   const tf = document.getElementById("timeframe-select").value;
   const lookback = parseInt(document.getElementById("lookback-select").value);
@@ -486,7 +946,18 @@ async function runBacktest() {
     });
 
     const json = await res.json();
-    if (!json.success) return;
+    if (!json.success) {
+      const badge = document.getElementById("bt-status-badge");
+      if (badge) {
+        badge.innerHTML = `<span class="badge-status badge-unprofitable" style="background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 1px solid #ef4444;">${json.error || 'Backtest failed'}</span>`;
+      }
+      document.querySelectorAll("#bt-buy-entry, #bt-buy-exit, #bt-sell-entry, #bt-sell-exit").forEach(inp => {
+        inp.classList.add("input-shake");
+        setTimeout(() => inp.classList.remove("input-shake"), 500);
+      });
+      Toast.error("Parameter Error", json.error || "Invalid entry/exit thresholds.");
+      return;
+    }
 
     currentBacktestResult = json;
     const s = json.summary;
@@ -497,16 +968,24 @@ async function runBacktest() {
     const netSign = s.net_pnl > 0 ? "+" : "";
     const commSign = s.total_commission >= 0 ? "+" : "";
 
-    if (s.is_profitable) {
+    if (s.total_trades === 0) {
+      badge.innerHTML = `
+        <span class="badge-status" style="background: #1e293b; color: #94a3b8; border: 1px solid #334155;">No trades</span>
+        <span class="bt-summary-stats-text">0 trades triggered for specified threshold levels</span>
+      `;
+      Toast.info("Backtest Completed", "0 trades triggered for specified threshold levels.");
+    } else if (s.is_profitable) {
       badge.innerHTML = `
         <span class="badge-status badge-profitable">Profitable</span>
         <span class="bt-summary-stats-text">${s.total_trades} trades | net ${netSign}${s.net_pnl.toFixed(4)} spread units (after ${commSign}${s.total_commission.toFixed(4)} commission)</span>
       `;
+      Toast.success("Strategy Profitable", `${s.total_trades} trades executed • Net ${netSign}${s.net_pnl.toFixed(2)} spread units (${s.win_rate_pct}% win rate)`);
     } else {
       badge.innerHTML = `
         <span class="badge-status badge-unprofitable">Unprofitable</span>
         <span class="bt-summary-stats-text">${s.total_trades} trades | net ${netSign}${s.net_pnl.toFixed(4)} spread units (after ${commSign}${s.total_commission.toFixed(4)} commission)</span>
       `;
+      Toast.warning("Strategy Unprofitable", `${s.total_trades} trades executed • Net ${s.net_pnl.toFixed(2)} spread units (costs exceeded edge)`);
     }
 
     // 6 Backtest KPI Cards matching Image 5
@@ -553,7 +1032,12 @@ async function runBacktest() {
   } catch (err) {
     console.error("Backtest execution failed:", err);
   } finally {
-    if (btn) btn.style.opacity = "1";
+    if (btn) {
+      btn.innerHTML = RUN_BACKTEST_DEFAULT_HTML;
+      btn.disabled = false;
+      btn.style.opacity = "1";
+      btn.classList.remove("running");
+    }
   }
 }
 
@@ -561,6 +1045,9 @@ function renderTradesTable() {
   if (!currentBacktestResult || !currentBacktestResult.trades) return;
   const trades = currentBacktestResult.trades;
   const tbody = document.getElementById("bt-trades-tbody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+
   if (trades.length === 0) {
     document.getElementById("bt-page-info").innerText = "0 / 0";
     tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 18px;">No trades triggered for the specified threshold levels.</td></tr>`;
@@ -575,6 +1062,9 @@ function renderTradesTable() {
 
   pageTrades.forEach(t => {
     const tr = document.createElement("tr");
+    tr.style.cursor = "pointer";
+    tr.setAttribute("onclick", `openTradeModal(${t.trade_num})`);
+    tr.setAttribute("title", "Click to inspect trade execution details");
     const netClass = t.net > 0 ? "pos" : (t.net < 0 ? "neg" : "");
     const grossClass = t.gross > 0 ? "pos" : (t.gross < 0 ? "neg" : "");
     const openTag = t.is_open ? "*" : "";
@@ -605,4 +1095,241 @@ function changeTradePage(delta) {
     currentTradePage = newPage;
     renderTradesTable();
   }
+}
+
+// -----------------------------------------------------------------------------
+// Interactive Trade Details Popup Modal
+// -----------------------------------------------------------------------------
+function openTradeModal(tradeNum) {
+  if (!currentBacktestResult || !currentBacktestResult.trades) return;
+  const trade = currentBacktestResult.trades.find(t => t.trade_num === tradeNum);
+  if (!trade) return;
+
+  const backdrop = document.getElementById("trade-modal-backdrop");
+  if (!backdrop) return;
+
+  // Title and badges
+  document.getElementById("modal-trade-title").innerText = `Trade #${trade.trade_num} Execution Details`;
+
+  const sideTag = document.getElementById("modal-side-tag");
+  sideTag.innerText = trade.side.toUpperCase();
+  sideTag.className = `modal-side-tag ${trade.side === "Long" ? "tag-long" : "tag-short"}`;
+
+  const statusTag = document.getElementById("modal-status-tag");
+  if (trade.is_open) {
+    statusTag.innerText = "OPEN (MARK-TO-MARKET)";
+    statusTag.className = "modal-status-tag open-pos";
+  } else {
+    statusTag.innerText = "CLOSED";
+    statusTag.className = "modal-status-tag";
+  }
+
+  // Net PnL Callout
+  const netEl = document.getElementById("modal-net-pnl");
+  netEl.innerText = `${trade.net > 0 ? "+" : ""}${trade.net.toFixed(4)}`;
+  netEl.className = `modal-pnl-main ${trade.net > 0 ? "pos" : (trade.net < 0 ? "neg" : "")}`;
+
+  // Breakdown chips
+  const grossEl = document.getElementById("modal-gross-pnl");
+  grossEl.innerText = `${trade.gross > 0 ? "+" : ""}${trade.gross.toFixed(4)}`;
+  grossEl.className = `chip-val ${trade.gross > 0 ? "pos" : (trade.gross < 0 ? "neg" : "")}`;
+
+  const commEl = document.getElementById("modal-friction-cost");
+  commEl.innerText = `-${trade.commission.toFixed(4)}`;
+
+  // Grid items
+  document.getElementById("modal-entry-time").innerText = trade.entry_time_display || trade.entry_time || "--";
+  document.getElementById("modal-exit-time").innerText = trade.exit_time_display || trade.exit_time || "--";
+  document.getElementById("modal-entry-px").innerText = `${trade.entry_price > 0 ? "+" : ""}${trade.entry_price.toFixed(4)}`;
+  document.getElementById("modal-exit-px").innerText = `${trade.exit_price > 0 ? "+" : ""}${trade.exit_price.toFixed(4)}`;
+
+  // Holding duration calculation
+  let durationStr = "--";
+  try {
+    const t0 = new Date(trade.entry_time).getTime();
+    const t1 = new Date(trade.exit_time).getTime();
+    if (!isNaN(t0) && !isNaN(t1)) {
+      const diffSec = Math.max(0, Math.floor((t1 - t0) / 1000));
+      const hours = Math.floor(diffSec / 3600);
+      const mins = Math.floor((diffSec % 3600) / 60);
+      if (hours > 0) {
+        durationStr = `${hours}h ${mins}m`;
+      } else {
+        durationStr = `${mins}m`;
+      }
+    }
+  } catch (e) {
+    durationStr = "--";
+  }
+  document.getElementById("modal-duration").innerText = durationStr;
+
+  const levelInfo = `Static Mean-Reversion (${trade.side})`;
+  document.getElementById("modal-level-info").innerText = levelInfo;
+
+  // Spread execution pathway
+  document.getElementById("modal-path-entry").innerText = `${trade.entry_price > 0 ? "+" : ""}${trade.entry_price.toFixed(4)}`;
+  document.getElementById("modal-path-exit").innerText = `${trade.exit_price > 0 ? "+" : ""}${trade.exit_price.toFixed(4)}`;
+
+  const delta = trade.side === "Long" ? (trade.exit_price - trade.entry_price) : (trade.entry_price - trade.exit_price);
+  const deltaEl = document.getElementById("modal-path-delta");
+  deltaEl.innerText = `${delta > 0 ? "+" : ""}${delta.toFixed(4)} pts`;
+  deltaEl.className = `mpath-val ${delta > 0 ? "pos" : (delta < 0 ? "neg" : "")}`;
+
+  backdrop.classList.remove("closing");
+  backdrop.classList.add("open");
+}
+
+function closeTradeModal(e) {
+  if (e && e.target && e.target.id !== "trade-modal-backdrop" && !e.target.closest(".modal-close-btn") && !e.target.classList.contains("btn-refresh")) {
+    return;
+  }
+  const backdrop = document.getElementById("trade-modal-backdrop");
+  if (backdrop) {
+    backdrop.classList.add("closing");
+    setTimeout(() => {
+      backdrop.classList.remove("open", "closing");
+    }, 220);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Venue Connections & Client Setup Modal
+// ---------------------------------------------------------------------------
+let connectionData = null;
+
+async function checkVenueConnection() {
+  try {
+    const res = await fetch("/api/connection-status");
+    if (!res.ok) return;
+    const data = await res.json();
+    connectionData = data;
+
+    const dot = document.getElementById("conn-pill-dot");
+    const text = document.getElementById("conn-pill-text");
+
+    if (data.mt5 && data.mt5.connected) {
+      if (dot) {
+        dot.className = "status-dot connected";
+      }
+      if (text) {
+        const srv = data.mt5.account ? data.mt5.account.server : "Active Terminal";
+        text.innerText = `MT5: Connected (${srv})`;
+      }
+    } else {
+      if (dot) {
+        dot.className = "status-dot disconnected";
+      }
+      if (text) {
+        text.innerText = "MT5: Not Connected (Open MT5)";
+      }
+    }
+  } catch (e) {
+    console.error("Failed to check connection status:", e);
+  }
+}
+
+async function openVenueModal() {
+  const modal = document.getElementById("venue-modal");
+  if (!modal) return;
+  modal.classList.remove("closing");
+  modal.classList.add("open");
+
+  const content = document.getElementById("venue-modal-content");
+  content.innerHTML = `<div style="text-align:center; padding:24px; color:var(--text-muted);"><svg class="spinner-svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:middle; margin-right:6px;"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-linecap="round"></circle></svg> Loading connection details...</div>`;
+
+  await checkVenueConnection();
+  renderVenueModalContent();
+}
+
+function closeVenueModal() {
+  const modal = document.getElementById("venue-modal");
+  if (!modal) return;
+  modal.classList.add("closing");
+  setTimeout(() => {
+    modal.classList.remove("open", "closing");
+  }, 220);
+}
+
+function renderVenueModalContent() {
+  const content = document.getElementById("venue-modal-content");
+  if (!content) return;
+
+  const mt5 = connectionData && connectionData.mt5 ? connectionData.mt5 : null;
+  const hl = connectionData && connectionData.hyperliquid ? connectionData.hyperliquid : null;
+  const mt5Acc = mt5 && mt5.account ? mt5.account : null;
+
+  const mt5Connected = mt5 && mt5.connected;
+  const mt5Badge = mt5Connected
+    ? `<span class="modal-badge-connected">● CONNECTED</span>`
+    : `<span class="modal-badge-disconnected">○ NOT DETECTED</span>`;
+
+  const hlBadge = `<span class="modal-badge-connected">● CONNECTED (MAINNET)</span>`;
+
+  let mt5DetailsHtml = "";
+  if (mt5Connected && mt5Acc) {
+    mt5DetailsHtml = `
+      <div class="modal-grid">
+        <div><span class="modal-field-label">Broker Server:</span> <span class="modal-field-value">${mt5Acc.server || "N/A"}</span></div>
+        <div><span class="modal-field-label">Account Number:</span> <span class="modal-field-value">${mt5Acc.login || "N/A"}</span></div>
+        <div><span class="modal-field-label">Mode:</span> <span class="modal-field-value">${mt5Acc.trade_mode || "N/A"}</span></div>
+        <div><span class="modal-field-label">Currency:</span> <span class="modal-field-value">${mt5Acc.currency || "USD"}</span></div>
+        <div><span class="modal-field-label">Connection Source:</span> <span class="modal-field-value">${mt5.source || "Active Desktop Terminal"}</span></div>
+        <div><span class="modal-field-label">Terminal Status:</span> <span class="modal-field-value" style="color:#10b981;">Local Windows IPC Active</span></div>
+      </div>
+    `;
+  } else {
+    mt5DetailsHtml = `
+      <div style="font-size: 12px; color: #f59e0b; margin-top: 6px;">
+        MetaTrader 5 terminal is not detected. Please open your MT5 application on your PC, or configure credentials in <code>.env</code>.
+      </div>
+    `;
+  }
+
+  content.innerHTML = `
+    <!-- MetaTrader 5 Card -->
+    <div class="modal-section">
+      <div class="modal-section-title">
+        <span>MetaTrader 5 (CFDs / FX / Metals)</span>
+        ${mt5Badge}
+      </div>
+      ${mt5DetailsHtml}
+    </div>
+
+    <!-- HyperLiquid Card -->
+    <div class="modal-section">
+      <div class="modal-section-title">
+        <span>HyperLiquid (Builder DEX Perps)</span>
+        ${hlBadge}
+      </div>
+      <div class="modal-grid">
+        <div><span class="modal-field-label">Endpoint:</span> <span class="modal-field-value">api.hyperliquid.xyz/info</span></div>
+        <div><span class="modal-field-label">Default DEX:</span> <span class="modal-field-value">${(hl && hl.info && hl.info.dex) || "xyz"}</span></div>
+        <div><span class="modal-field-label">Wallet Address:</span> <span class="modal-field-value">${(hl && hl.info && hl.info.wallet_masked) || "Public Mode (No Wallet Needed)"}</span></div>
+        <div><span class="modal-field-label">Data Mode:</span> <span class="modal-field-value" style="color:#10b981;">High-Speed Public REST</span></div>
+      </div>
+    </div>
+
+    <!-- Client Credentials & Privacy Guide -->
+    <div class="modal-section" style="background:#0b0e14; border-color:#2a364a;">
+      <div class="modal-section-title" style="color:#38bdf8;">
+        <span>🔒 Client Privacy & Where to Add Credentials</span>
+      </div>
+      <p style="font-size:12px; line-height:1.5; color:var(--text-muted); margin-bottom:8px;">
+        <strong style="color:#ffffff;">Zero Credentials Shared:</strong> When you share this package with clients, your personal account logins and passwords are <strong>never included</strong>. The app runs locally on each user's computer.
+      </p>
+      <div style="font-size:11.5px; color:#cbd5e1; margin-bottom:6px;">
+        <strong>How Clients Connect Their Accounts:</strong>
+      </div>
+      <ol style="font-size:11.5px; color:var(--text-muted); padding-left:18px; margin:0 0 10px 0; line-height:1.6;">
+        <li><strong style="color:#ffffff;">Easiest (Zero Setup):</strong> Simply open MetaTrader 5 on your PC and log into your broker. ODIN RESEARCH automatically connects to your open terminal.</li>
+        <li><strong style="color:#ffffff;">Automated / Headless:</strong> Create or edit the <code>.env</code> file in the project folder:</li>
+      </ol>
+      <div class="code-box"># .env configuration file
+MT5_LOGIN=12345678
+MT5_PASSWORD=YourPasswordHere
+MT5_SERVER=YourBroker-Demo
+HL_DEX=xyz
+HL_WALLET_ADDRESS=</div>
+    </div>
+  `;
 }

@@ -10,7 +10,7 @@ import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, Query, HTTPException, Body
+from fastapi import FastAPI, Query, HTTPException, Body, WebSocket
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -36,6 +36,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def add_no_cache_headers(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.endswith(".html") or path.endswith(".js") or path.endswith(".css"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 # Global engine instance
 engine = ScreenerEngine()
 
@@ -49,23 +59,36 @@ def startup_event():
 
 @app.get("/api/health")
 def health_check():
+    mt5_acc = engine.mt5_feed.get_account_info() if engine.mt5_feed._is_initialized else None
     return {
         "status": "healthy",
         "mt5_connected": engine.mt5_feed._is_initialized,
+        "mt5_server": mt5_acc.get("server") if mt5_acc else None,
+        "mt5_trade_mode": mt5_acc.get("trade_mode") if mt5_acc else None,
         "remote_ticks_count": len(engine._remote_ticks),
         "remote_candles_count": len(engine._remote_candles),
         "server_time_utc": datetime.now(timezone.utc).isoformat()
     }
 
 
-class SyncFeedRequest(BaseModel):
-    ticks: Dict[str, Dict[str, Any]]
-
-
-@app.post("/api/sync-feed")
-def sync_feed(req: SyncFeedRequest):
-    engine.update_remote_ticks(req.ticks)
-    return {"success": True, "count": len(req.ticks)}
+@app.get("/api/connection-status")
+def get_connection_status():
+    mt5_acc = engine.mt5_feed.get_account_info() if engine.mt5_feed._is_initialized else None
+    hl_info = engine.hl_feed.get_connection_info()
+    return {
+        "status": "healthy",
+        "mt5": {
+            "connected": engine.mt5_feed._is_initialized,
+            "account": mt5_acc,
+            "source": "Custom .env Credentials" if engine.mt5_feed.login else "Active Desktop Terminal",
+            "guide": "ODIN RESEARCH automatically connects to whichever MT5 terminal is open on your desktop. If you prefer headless login, set MT5_LOGIN, MT5_PASSWORD, and MT5_SERVER in .env."
+        },
+        "hyperliquid": {
+            "connected": True,
+            "info": hl_info,
+            "guide": "Public market data is streamed directly from the HyperLiquid Info API without requiring private keys or wallet connections. To trade or view private balances, configure HL_WALLET_ADDRESS in .env."
+        }
+    }
 
 
 class SyncCandlesRequest(BaseModel):
@@ -92,9 +115,12 @@ def get_pairs():
 
 
 @app.get("/api/screener")
-def get_screener_data(category: str = Query("All")):
+def get_screener_data(
+    category: str = Query("All"),
+    refresh: bool = Query(False)
+):
     try:
-        rows = engine.get_screener_table(category=category)
+        rows = engine.get_screener_table(category=category, force_refresh=refresh)
         return {
             "success": True,
             "category": category,
@@ -111,13 +137,15 @@ def get_screener_data(category: str = Query("All")):
 def get_pair_analysis_data(
     symbol: str = Query(..., description="Symbol (e.g. JP225, SP500, GOLD)"),
     timeframe: str = Query("1m", description="Candle timeframe e.g. 1m, 5m, 15m, 1h, 1d"),
-    lookback_hours: int = Query(48, description="Lookback window in hours")
+    lookback_hours: int = Query(48, description="Lookback window in hours"),
+    refresh: bool = Query(False)
 ):
     try:
         analysis = engine.get_pair_analysis(
             symbol=symbol,
             timeframe=timeframe,
-            lookback_hours=lookback_hours
+            lookback_hours=lookback_hours,
+            use_cache=not refresh
         )
 
         df = analysis["aligned_df"]
@@ -136,6 +164,13 @@ def get_pair_analysis_data(
             ref_oracle_diff = analysis["metrics"]["oracle_spread"] or 0.0
             cur_spread = analysis["metrics"]["current_spread"] or 0.0
             oracle_basis = [round(float(s - cur_spread + ref_oracle_diff), 4) for s in spread]
+        elif "df_hl" in analysis and not analysis["df_hl"].empty:
+            df_hl = analysis["df_hl"]
+            times = [str(t) for t in df_hl.index]
+            hl_close = [float(x) for x in df_hl["close"].tolist()]
+            mt5_close = []
+            spread = []
+            oracle_basis = []
 
         return {
             "success": True,
@@ -209,9 +244,18 @@ def run_backtest(req: BacktestRequest):
             "trades": result["trades"],
             "equity_curve": result["equity_curve"]
         }
+    except ValueError as ve:
+        logger.warning(f"Backtest parameter validation: {ve}")
+        return {"success": False, "error": str(ve)}
     except Exception as e:
         logger.error(f"Error executing backtest: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"success": False, "error": f"Backtest execution failed: {str(e)}"}
+
+
+@app.websocket("/{full_path:path}")
+async def websocket_fallback(websocket: WebSocket, full_path: str):
+    await websocket.accept()
+    await websocket.close(code=1000)
 
 
 # Mount static assets for web UI
@@ -220,8 +264,48 @@ if os.path.exists(static_dir):
     app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
 
 
+def ensure_port_free(target_port: int):
+    """Checks if target_port is occupied, and cleanly terminates any old process on it."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        res = s.connect_ex(("127.0.0.1", target_port))
+        if res == 0:
+            logger.warning(f"Port {target_port} is currently in use. Freeing port...")
+            try:
+                import psutil
+                current_pid = os.getpid()
+                for proc in psutil.process_iter(["pid", "name"]):
+                    if proc.pid == current_pid:
+                        continue
+                    try:
+                        for conn in proc.net_connections(kind="inet"):
+                            if conn.laddr.port == target_port and conn.status == "LISTEN":
+                                logger.info(f"Terminating old process PID {proc.pid} ({proc.name()}) on port {target_port}...")
+                                proc.terminate()
+                                proc.wait(timeout=2)
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning(f"Could not check psutil to terminate port occupant: {e}")
+
+
+def open_browser_delayed(target_url: str):
+    """Waits for server to initialize, then launches user default browser."""
+    import time
+    import webbrowser
+    time.sleep(1.2)
+    try:
+        webbrowser.open(target_url)
+    except Exception as e:
+        logger.warning(f"Could not open browser automatically: {e}")
+
+
 if __name__ == "__main__":
     import uvicorn
+    import threading
     port = int(os.environ.get("PORT", 8000))
-    logger.info(f"Starting ArbitrageLab server on port {port}...")
+    ensure_port_free(port)
+    logger.info(f"Starting ODIN Arbitrage Screener server on port {port}...")
+    url = f"http://127.0.0.1:{port}"
+    threading.Thread(target=open_browser_delayed, args=(url,), daemon=True).start()
     uvicorn.run("server:app", host="0.0.0.0", port=port, reload=False)
