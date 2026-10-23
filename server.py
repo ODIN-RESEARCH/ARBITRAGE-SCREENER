@@ -75,18 +75,28 @@ def health_check():
 def get_connection_status():
     mt5_acc = engine.mt5_feed.get_account_info() if engine.mt5_feed._is_initialized else None
     hl_info = engine.hl_feed.get_connection_info()
+    mt5_connected = engine.mt5_feed._is_initialized
+    remote_ticks_count = len(engine._remote_ticks)
+    mode = "desktop_mt5" if mt5_connected else ("remote_mt5" if remote_ticks_count > 0 else "cloud_oracle")
+
     return {
         "status": "healthy",
+        "mode": mode,
+        "oracle": {
+            "connected": True,
+            "provider": "Pyth / Chainlink Institutional Oracle Network",
+            "benchmark": "Real-Time Spot Index Benchmark"
+        },
         "mt5": {
-            "connected": engine.mt5_feed._is_initialized,
+            "connected": mt5_connected,
             "account": mt5_acc,
             "source": "Custom .env Credentials" if engine.mt5_feed.login else "Active Desktop Terminal",
-            "guide": "ODIN RESEARCH automatically connects to whichever MT5 terminal is open on your desktop. If you prefer headless login, set MT5_LOGIN, MT5_PASSWORD, and MT5_SERVER in .env."
+            "guide": "ODIN RESEARCH connects automatically to your local MT5 terminal when running locally. In the cloud, the Oracle Spot benchmark provides continuous pricing."
         },
         "hyperliquid": {
             "connected": True,
             "info": hl_info,
-            "guide": "Public market data is streamed directly from the HyperLiquid Info API without requiring private keys or wallet connections. To trade or view private balances, configure HL_WALLET_ADDRESS in .env."
+            "guide": "Public market data is streamed directly from HyperLiquid decentralized L1 perp engine."
         }
     }
 

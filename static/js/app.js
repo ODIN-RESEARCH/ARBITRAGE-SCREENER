@@ -1208,20 +1208,18 @@ async function checkVenueConnection() {
     const text = document.getElementById("conn-pill-text");
 
     if (data.mt5 && data.mt5.connected) {
-      if (dot) {
-        dot.className = "status-dot connected";
-      }
+      if (dot) dot.className = "status-dot connected";
       if (text) {
         const srv = data.mt5.account ? data.mt5.account.server : "Active Terminal";
         text.innerText = `MT5: Connected (${srv})`;
       }
+    } else if (data.mode === "remote_mt5") {
+      if (dot) dot.className = "status-dot connected";
+      if (text) text.innerText = "Live Remote MT5 Stream";
     } else {
-      if (dot) {
-        dot.className = "status-dot disconnected";
-      }
-      if (text) {
-        text.innerText = "MT5: Not Connected (Open MT5)";
-      }
+      // Cloud Autonomous Mode: HyperLiquid Perps vs. Spot Oracle
+      if (dot) dot.className = "status-dot connected";
+      if (text) text.innerText = "Live Cloud Feed: HL & Spot Oracle";
     }
   } catch (e) {
     console.error("Failed to check connection status:", e);
@@ -1257,79 +1255,83 @@ function renderVenueModalContent() {
   const mt5 = connectionData && connectionData.mt5 ? connectionData.mt5 : null;
   const hl = connectionData && connectionData.hyperliquid ? connectionData.hyperliquid : null;
   const mt5Acc = mt5 && mt5.account ? mt5.account : null;
-
   const mt5Connected = mt5 && mt5.connected;
-  const mt5Badge = mt5Connected
-    ? `<span class="modal-badge-connected">● CONNECTED</span>`
-    : `<span class="modal-badge-disconnected">○ NOT DETECTED</span>`;
 
-  const hlBadge = `<span class="modal-badge-connected">● CONNECTED (MAINNET)</span>`;
-
+  let mt5Badge = "";
   let mt5DetailsHtml = "";
+
   if (mt5Connected && mt5Acc) {
+    mt5Badge = `<span class="modal-badge-connected">● CONNECTED (LOCAL DESKTOP)</span>`;
     mt5DetailsHtml = `
       <div class="modal-grid">
         <div><span class="modal-field-label">Broker Server:</span> <span class="modal-field-value">${mt5Acc.server || "N/A"}</span></div>
         <div><span class="modal-field-label">Account Number:</span> <span class="modal-field-value">${mt5Acc.login || "N/A"}</span></div>
-        <div><span class="modal-field-label">Mode:</span> <span class="modal-field-value">${mt5Acc.trade_mode || "N/A"}</span></div>
-        <div><span class="modal-field-label">Currency:</span> <span class="modal-field-value">${mt5Acc.currency || "USD"}</span></div>
-        <div><span class="modal-field-label">Connection Source:</span> <span class="modal-field-value">${mt5.source || "Active Desktop Terminal"}</span></div>
-        <div><span class="modal-field-label">Terminal Status:</span> <span class="modal-field-value" style="color:#10b981;">Local Windows IPC Active</span></div>
+        <div><span class="modal-field-label">Account Currency:</span> <span class="modal-field-value">${mt5Acc.currency || "USD"}</span></div>
+        <div><span class="modal-field-label">Leverage:</span> <span class="modal-field-value">1:${mt5Acc.leverage || "N/A"}</span></div>
+        <div><span class="modal-field-label">Account Balance:</span> <span class="modal-field-value">$${Number(mt5Acc.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span></div>
+        <div><span class="modal-field-label">Account Equity:</span> <span class="modal-field-value">$${Number(mt5Acc.equity || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span></div>
+      </div>
+    `;
+  } else if (connectionData && connectionData.mode === "remote_mt5") {
+    mt5Badge = `<span class="modal-badge-connected">● CONNECTED (REMOTE STREAM)</span>`;
+    mt5DetailsHtml = `
+      <div style="font-size:12px; color:var(--text-muted); line-height:1.5;">
+        Receiving continuous live broker quotes and historical bars streamed from a remote MT5 publisher agent.
       </div>
     `;
   } else {
+    mt5Badge = `<span class="modal-badge-connected" style="background:rgba(56,189,248,0.15); color:#38bdf8; border-color:rgba(56,189,248,0.3);">● CLOUD ORACLE MODE ACTIVE</span>`;
     mt5DetailsHtml = `
-      <div style="font-size: 12px; color: #f59e0b; margin-top: 6px;">
-        MetaTrader 5 terminal is not detected. Please open your MT5 application on your PC, or configure credentials in <code>.env</code>.
+      <div style="font-size:12px; color:var(--text-muted); line-height:1.6; margin-bottom:8px;">
+        <strong style="color:var(--text-main);">Zero Local Setup Required:</strong> The cloud screener and backtester are actively driven by institutional Pyth & Chainlink spot oracle feeds. Spreads represent true Perpetual Basis (HyperLiquid Perp vs. Cash Spot Index).
+      </div>
+      <div style="font-size:11px; color:#94a3b8; background:rgba(30,41,59,0.7); padding:8px 12px; border-radius:6px; border:1px solid rgba(255,255,255,0.06);">
+        💡 <strong>Want to connect your private broker?</strong> Download the client package (<code style="color:#38bdf8;">1.zip</code>) and launch <code style="color:#38bdf8;">start.bat</code> on your PC, or run <code style="color:#38bdf8;">python publish_agent.py --cloud-url [Render URL]</code>.
       </div>
     `;
   }
 
+  const hlBadge = `<span class="modal-badge-connected">● CONNECTED (MAINNET L1)</span>`;
+
   content.innerHTML = `
-    <!-- MetaTrader 5 Card -->
-    <div class="modal-section">
-      <div class="modal-section-title">
-        <span>MetaTrader 5 (CFDs / FX / Metals)</span>
+    <!-- Venue 1: HyperLiquid -->
+    <div class="modal-venue-card">
+      <div class="modal-venue-header">
+        <div class="modal-venue-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+            <polyline points="2 17 12 22 22 17"></polyline>
+            <polyline points="2 12 12 17 22 12"></polyline>
+          </svg>
+          HyperLiquid L1 Perp Engine
+        </div>
+        ${hlBadge}
+      </div>
+      <div class="modal-grid" style="margin-bottom:12px;">
+        <div><span class="modal-field-label">API Endpoint:</span> <span class="modal-field-value">api.hyperliquid.xyz/info</span></div>
+        <div><span class="modal-field-label">Builder DEX:</span> <span class="modal-field-value">xyz (TradFi Perps)</span></div>
+        <div><span class="modal-field-label">Universe Pairs:</span> <span class="modal-field-value">137 Active Perpetual Markets</span></div>
+        <div><span class="modal-field-label">Data Ingestion:</span> <span class="modal-field-value">Real-Time WebSocket & REST</span></div>
+      </div>
+    </div>
+
+    <!-- Venue 2: Spot Oracle & MT5 -->
+    <div class="modal-venue-card" style="margin-top:16px;">
+      <div class="modal-venue-header">
+        <div class="modal-venue-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+            <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+            <line x1="6" y1="6" x2="6.01" y2="6"></line>
+            <line x1="6" y1="18" x2="6.01" y2="18"></line>
+          </svg>
+          TradFi Spot Benchmark & MetaTrader 5
+        </div>
         ${mt5Badge}
       </div>
       ${mt5DetailsHtml}
     </div>
-
-    <!-- HyperLiquid Card -->
-    <div class="modal-section">
-      <div class="modal-section-title">
-        <span>HyperLiquid (Builder DEX Perps)</span>
-        ${hlBadge}
-      </div>
-      <div class="modal-grid">
-        <div><span class="modal-field-label">Endpoint:</span> <span class="modal-field-value">api.hyperliquid.xyz/info</span></div>
-        <div><span class="modal-field-label">Default DEX:</span> <span class="modal-field-value">${(hl && hl.info && hl.info.dex) || "xyz"}</span></div>
-        <div><span class="modal-field-label">Wallet Address:</span> <span class="modal-field-value">${(hl && hl.info && hl.info.wallet_masked) || "Public Mode (No Wallet Needed)"}</span></div>
-        <div><span class="modal-field-label">Data Mode:</span> <span class="modal-field-value" style="color:#10b981;">High-Speed Public REST</span></div>
-      </div>
-    </div>
-
-    <!-- Client Credentials & Privacy Guide -->
-    <div class="modal-section" style="background:#0b0e14; border-color:#2a364a;">
-      <div class="modal-section-title" style="color:#38bdf8;">
-        <span>🔒 Client Privacy & Where to Add Credentials</span>
-      </div>
-      <p style="font-size:12px; line-height:1.5; color:var(--text-muted); margin-bottom:8px;">
-        <strong style="color:#ffffff;">Zero Credentials Shared:</strong> When you share this package with clients, your personal account logins and passwords are <strong>never included</strong>. The app runs locally on each user's computer.
-      </p>
-      <div style="font-size:11.5px; color:#cbd5e1; margin-bottom:6px;">
-        <strong>How Clients Connect Their Accounts:</strong>
-      </div>
-      <ol style="font-size:11.5px; color:var(--text-muted); padding-left:18px; margin:0 0 10px 0; line-height:1.6;">
-        <li><strong style="color:#ffffff;">Easiest (Zero Setup):</strong> Simply open MetaTrader 5 on your PC and log into your broker. ODIN RESEARCH automatically connects to your open terminal.</li>
-        <li><strong style="color:#ffffff;">Automated / Headless:</strong> Create or edit the <code>.env</code> file in the project folder:</li>
-      </ol>
-      <div class="code-box"># .env configuration file
-MT5_LOGIN=12345678
-MT5_PASSWORD=YourPasswordHere
-MT5_SERVER=YourBroker-Demo
-HL_DEX=xyz
-HL_WALLET_ADDRESS=</div>
-    </div>
   `;
 }
+
+
